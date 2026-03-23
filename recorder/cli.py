@@ -14,7 +14,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--process-name", default=None)
     parser.add_argument("--pid", type=int, default=None)
     parser.add_argument("--hwnd", type=int, default=None)
-    parser.add_argument("--mouse-move-interval", type=float, default=0.25)
+    parser.add_argument("--mouse-move-interval", type=float, default=1)
     parser.add_argument("--session-id", default=None)
     return parser
 

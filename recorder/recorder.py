@@ -23,7 +23,7 @@ class InteractionRecorder:
         self,
         output_dir: str,
         window_filter: WindowFilter,
-        mouse_move_interval_seconds: float = 0.25,
+        mouse_move_interval_seconds: float = 1,
         session_id: str | None = None,
         external_stop_event: threading.Event | None = None,
         strict_window_filter: bool | None = None,
@@ -54,7 +54,7 @@ class InteractionRecorder:
         self.ended_at: str | None = None
 
         self.debug = True
-        self.debug_print_limit = 250
+        self.debug_print_limit = 500
         self.debug_print_count = 0
 
         self.strict_window_filter = (
