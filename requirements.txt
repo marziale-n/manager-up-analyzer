@@ -1,0 +1,7 @@
+pynput
+pywinauto
+psutil
+orjson
+pywin32
+tk
+pyinstaller
