@@ -57,6 +57,129 @@ def button_control() -> dict[str, object]:
 
 
 class StateManagerTests(unittest.TestCase):
+    def test_register_event_click_on_other_control_emits_input_commit(self) -> None:
+        manager = StateManager()
+
+        manager.register_event(
+            {
+                "event_type": "mouse_click",
+                "timestamp_utc": "2026-03-23T10:00:00Z",
+                "pressed": False,
+                "key_name": None,
+                "pre_snapshot": None,
+                "post_snapshot": editable_control(value=""),
+                "target_snapshot": editable_control(value=""),
+            }
+        )
+        manager.register_event(
+            {
+                "event_type": "key_down",
+                "timestamp_utc": "2026-03-23T10:00:01Z",
+                "pressed": None,
+                "key_name": "x",
+                "pre_snapshot": editable_control(value=""),
+                "post_snapshot": editable_control(value=""),
+            }
+        )
+
+        commit_events = manager.register_event(
+            {
+                "event_type": "mouse_click",
+                "timestamp_utc": "2026-03-23T10:00:02Z",
+                "pressed": False,
+                "key_name": None,
+                "pre_snapshot": editable_control(value="new value"),
+                "post_snapshot": editable_control(
+                    value=None,
+                    handle=102,
+                    control_name="Codice",
+                    automation_id="txtCodice",
+                    control_id="txtCodice",
+                ),
+                "target_snapshot": button_control(),
+            }
+        )
+
+        self.assertEqual(len(commit_events), 1)
+        self.assertEqual(commit_events[0]["final_value"], "new value")
+        self.assertEqual(commit_events[0]["commit_reason"], "confirm_button")
+
+    def test_register_event_enter_emits_input_commit(self) -> None:
+        manager = StateManager()
+
+        manager.register_event(
+            {
+                "event_type": "mouse_click",
+                "timestamp_utc": "2026-03-23T10:05:00Z",
+                "pressed": False,
+                "key_name": None,
+                "pre_snapshot": None,
+                "post_snapshot": editable_control(value="old"),
+                "target_snapshot": editable_control(value="old"),
+            }
+        )
+        manager.register_event(
+            {
+                "event_type": "key_down",
+                "timestamp_utc": "2026-03-23T10:05:01Z",
+                "pressed": None,
+                "key_name": "x",
+                "pre_snapshot": editable_control(value="old"),
+                "post_snapshot": editable_control(value="old"),
+            }
+        )
+
+        commit_events = manager.register_event(
+            {
+                "event_type": "key_up",
+                "timestamp_utc": "2026-03-23T10:05:02Z",
+                "pressed": None,
+                "key_name": "Key.enter",
+                "pre_snapshot": editable_control(value="oldx"),
+                "post_snapshot": editable_control(value="oldx"),
+            }
+        )
+
+        self.assertEqual(len(commit_events), 1)
+        self.assertEqual(commit_events[0]["previous_value"], "old")
+        self.assertEqual(commit_events[0]["final_value"], "oldx")
+        self.assertEqual(commit_events[0]["commit_reason"], "enter")
+
+    def test_register_event_click_without_change_emits_no_commit(self) -> None:
+        manager = StateManager()
+
+        manager.register_event(
+            {
+                "event_type": "mouse_click",
+                "timestamp_utc": "2026-03-23T10:07:00Z",
+                "pressed": False,
+                "key_name": None,
+                "pre_snapshot": None,
+                "post_snapshot": editable_control(value="same"),
+                "target_snapshot": editable_control(value="same"),
+            }
+        )
+
+        commit_events = manager.register_event(
+            {
+                "event_type": "mouse_click",
+                "timestamp_utc": "2026-03-23T10:07:01Z",
+                "pressed": False,
+                "key_name": None,
+                "pre_snapshot": editable_control(value="same"),
+                "post_snapshot": editable_control(
+                    value=None,
+                    handle=102,
+                    control_name="Codice",
+                    automation_id="txtCodice",
+                    control_id="txtCodice",
+                ),
+                "target_snapshot": button_control(),
+            }
+        )
+
+        self.assertEqual(commit_events, [])
+
     def test_state_lifecycle_tracks_start_current_and_commit(self) -> None:
         manager = StateManager()
         control = editable_control(value="old")
@@ -223,6 +346,95 @@ class StateManagerTests(unittest.TestCase):
         self.assertEqual(first_state.typed_buffer, "1")
         self.assertEqual(second_state.typed_buffer, "2")
         self.assertNotEqual(first_state.control_key, second_state.control_key)
+
+    def test_numpad_date_keys_are_preserved_in_typed_buffer_commit(self) -> None:
+        manager = StateManager()
+        control = editable_control(value=None)
+        manager.on_focus_gained(control, timestamp_utc="2026-03-23T10:50:00Z")
+
+        for index, key_name in enumerate(("<97>", "<98>", "VK_DIVIDE", "<96>", "<99>", "VK_SUBTRACT", "<98>", "<96>", "<98>", "<102>"), start=1):
+            manager.on_key_event(
+                control,
+                {"event_type": "key_down", "key_name": key_name, "timestamp_utc": f"2026-03-23T10:50:{index:02d}Z"},
+            )
+
+        commit = manager.resolve_commit(
+            editable_control(value=None),
+            reason="enter",
+            timestamp_utc="2026-03-23T10:50:59Z",
+            source_event_type="key_up",
+            source_key="Key.enter",
+        )
+
+        self.assertIsNotNone(commit)
+        assert commit is not None
+        self.assertEqual(commit["final_value"], "12/03-2026")
+        self.assertEqual(commit["value_source"], "typed_buffer")
+
+    def test_duplicate_commit_from_register_event_is_suppressed(self) -> None:
+        manager = StateManager()
+
+        manager.register_event(
+            {
+                "event_type": "mouse_click",
+                "timestamp_utc": "2026-03-23T11:00:00Z",
+                "pressed": False,
+                "key_name": None,
+                "pre_snapshot": None,
+                "post_snapshot": editable_control(value="start"),
+                "target_snapshot": editable_control(value="start"),
+            }
+        )
+
+        first = manager.register_event(
+            {
+                "event_type": "mouse_click",
+                "timestamp_utc": "2026-03-23T11:00:01Z",
+                "pressed": False,
+                "key_name": None,
+                "pre_snapshot": editable_control(value="changed"),
+                "post_snapshot": editable_control(
+                    value=None,
+                    handle=102,
+                    control_name="Codice",
+                    automation_id="txtCodice",
+                    control_id="txtCodice",
+                ),
+                "target_snapshot": button_control(),
+            }
+        )
+        self.assertEqual(len(first), 1)
+
+        manager.register_event(
+            {
+                "event_type": "mouse_click",
+                "timestamp_utc": "2026-03-23T11:00:01.050000Z",
+                "pressed": False,
+                "key_name": None,
+                "pre_snapshot": None,
+                "post_snapshot": editable_control(value="changed"),
+                "target_snapshot": editable_control(value="changed"),
+            }
+        )
+
+        duplicate = manager.register_event(
+            {
+                "event_type": "mouse_click",
+                "timestamp_utc": "2026-03-23T11:00:01.100000Z",
+                "pressed": False,
+                "key_name": None,
+                "pre_snapshot": editable_control(value="changed"),
+                "post_snapshot": editable_control(
+                    value=None,
+                    handle=102,
+                    control_name="Codice",
+                    automation_id="txtCodice",
+                    control_id="txtCodice",
+                ),
+                "target_snapshot": button_control(),
+            }
+        )
+        self.assertEqual(duplicate, [])
 
 
 if __name__ == "__main__":

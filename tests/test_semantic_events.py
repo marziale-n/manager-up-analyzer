@@ -84,15 +84,17 @@ class SemanticEventBuilderTests(unittest.TestCase):
             event_type="mouse_click",
             timestamp_utc="2026-03-23T14:00:02Z",
             key_name=None,
+            pressed=False,
             pre_snapshot=editable_snapshot(value="abc"),
             post_snapshot=button_snapshot(),
+            target_snapshot=button_snapshot(),
             is_editable=is_editable,
         )
 
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["previous_value"], None)
         self.assertEqual(events[0]["final_value"], "abc")
-        self.assertEqual(events[0]["commit_reason"], "focus_lost")
+        self.assertEqual(events[0]["commit_reason"], "confirm_button")
         self.assertEqual(events[0]["value_source"], "payload")
         self.assertIn("control_key", events[0])
 

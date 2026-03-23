@@ -71,6 +71,11 @@ class InteractionRecorder:
         self.recorded_total = 0
 
     def on_runtime_event(self, payload: dict[str, Any]) -> None:
+        self._debug(
+            f"runtime_event: type={self._short(payload.get('event_type'))}, "
+            f"hwnd={self._short(payload.get('hwnd'))}, "
+            f"target={self._short((payload.get('ui_target') or {}).get('control_name'))}"
+        )
         self.state_manager.on_runtime_event(payload)
 
     def _debug(self, message: str) -> None:
@@ -430,8 +435,10 @@ class InteractionRecorder:
             event_type=kind,
             timestamp_utc=raw_event.timestamp_utc,
             key_name=payload.get("key"),
+            pressed=payload.get("pressed"),
             pre_snapshot=pre_focus_snapshot,
             post_snapshot=post_focus_snapshot or pre_focus_snapshot,
+            target_snapshot=self._build_target_snapshot(raw, payload),
             is_editable=self.ui_resolver.is_editable_target,
         )
         self._append_semantic_events(semantic_payloads, timestamp_utc=raw_event.timestamp_utc)
@@ -548,6 +555,27 @@ class InteractionRecorder:
             "post_ui_target": post_focus_snapshot.get("ui_target"),
             "post_focused_element": post_focus_snapshot.get("element_dict"),
             "post_focused_state": post_focus_snapshot.get("state"),
+        }
+
+    def _build_target_snapshot(
+        self,
+        raw: dict[str, Any],
+        payload: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        ui_target = payload.get("ui_target")
+        if ui_target is None and raw.get("target_element") is None and raw.get("target_state") is None:
+            return None
+        return {
+            "window_title": payload.get("window_title"),
+            "process_name": payload.get("process_name"),
+            "hwnd": payload.get("hwnd"),
+            "ui_target": ui_target,
+            "element": raw.get("target_element"),
+            "state": raw.get("target_state"),
+            "value": self.ui_resolver.extract_text_value(
+                state=raw.get("target_state"),
+                element=raw.get("target_element"),
+            ),
         }
 
     def _append_semantic_events(

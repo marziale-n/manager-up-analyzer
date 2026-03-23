@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from threading import RLock
 from typing import Any, Callable
@@ -113,13 +114,16 @@ class StateManager:
         timestamp_utc = event.get("timestamp_utc")
         event_type = event.get("event_type")
         key_name = event.get("key_name")
+        pressed = event.get("pressed")
         pre_snapshot = self._normalize_control(event.get("pre_snapshot"))
         post_snapshot = self._normalize_control(event.get("post_snapshot"))
+        target_snapshot = self._normalize_control(event.get("target_snapshot"))
         commits: list[dict[str, Any]] = []
 
         with self._lock:
             pre_key = self._control_key_if_editable(pre_snapshot)
             post_key = self._control_key_if_editable(post_snapshot)
+            target_key = self._build_control_key(target_snapshot) if target_snapshot is not None else None
 
             if event_type in {"key_down", "key_up"} and pre_snapshot is not None and pre_key is not None:
                 self.on_focus_gained(pre_snapshot, timestamp_utc=timestamp_utc)
@@ -146,11 +150,25 @@ class StateManager:
                     self.on_focus_gained(post_snapshot, timestamp_utc=timestamp_utc)
                 return commits
 
-            if pre_key is not None and pre_key != post_key:
+            should_commit_click = (
+                event_type == "mouse_click"
+                and pressed is False
+                and pre_key is not None
+                and self._should_commit_on_click(pre_key, post_key, target_key)
+            )
+            if pre_key is not None and (pre_key != post_key or should_commit_click):
+                commit_reason = self._resolve_focus_lost_reason(
+                    default_reason="focus_lost",
+                    event_type=event_type,
+                    pressed=pressed,
+                    pre_snapshot=pre_snapshot,
+                    post_snapshot=post_snapshot,
+                    target_snapshot=target_snapshot,
+                )
                 commit = self.on_focus_lost(
                     pre_snapshot,
                     timestamp_utc=timestamp_utc,
-                    reason="focus_lost",
+                    reason=commit_reason,
                     source_event_type=event_type,
                     source_key=key_name,
                 )
@@ -692,19 +710,140 @@ class StateManager:
         buffer = existing or ""
         if not key_name:
             return buffer or None
-        if len(key_name) == 1:
-            buffer += key_name
-            return buffer[-200:] or None
-        if key_name == "Key.space":
-            buffer += " "
-            return buffer[-200:] or None
-        if key_name == "Key.tab":
-            buffer += "\t"
+        mapped = self._key_name_to_text(key_name)
+        if mapped is not None:
+            buffer += mapped
             return buffer[-200:] or None
         if key_name == "Key.backspace":
             buffer = buffer[:-1]
             return buffer or None
         return buffer or None
+
+    def _key_name_to_text(self, key_name: str) -> str | None:
+        if len(key_name) == 1:
+            return key_name
+
+        direct_map = {
+            "Key.space": " ",
+            "Key.tab": "\t",
+            "Key.slash": "/",
+            "Key.divide": "/",
+            "Key.subtract": "-",
+            "Key.minus": "-",
+            "Key.decimal": ".",
+            "Key.separator": "/",
+            "VK_DIVIDE": "/",
+            "VK_SUBTRACT": "-",
+            "VK_DECIMAL": ".",
+            "VK_SEPARATOR": "/",
+            "OEM_MINUS": "-",
+            "OEM_PERIOD": ".",
+            "OEM_2": "/",
+        }
+        if key_name in direct_map:
+            return direct_map[key_name]
+
+        numeric_match = re.fullmatch(r"<(\d+)>", key_name)
+        if numeric_match:
+            code = int(numeric_match.group(1))
+            if 96 <= code <= 105:
+                return str(code - 96)
+            if code in {106, 111}:
+                return "/"
+            if code in {109, 189}:
+                return "-"
+            if code in {110, 190}:
+                return "."
+
+        normalized = key_name.lower()
+        if normalized.startswith("vk_numpad"):
+            suffix = normalized.removeprefix("vk_numpad")
+            if suffix.isdigit() and len(suffix) == 1:
+                return suffix
+        if normalized in {"numpad_divide", "numpad_slash"}:
+            return "/"
+        if normalized in {"numpad_subtract", "numpad_minus"}:
+            return "-"
+        if normalized in {"numpad_decimal", "numpad_period", "numpad_dot"}:
+            return "."
+        return None
+
+    def _should_commit_on_click(
+        self,
+        pre_key: str,
+        post_key: str | None,
+        target_key: str | None,
+    ) -> bool:
+        if post_key is not None and post_key != pre_key:
+            return True
+        if target_key is not None and target_key != pre_key:
+            return True
+        return False
+
+    def _resolve_focus_lost_reason(
+        self,
+        *,
+        default_reason: str,
+        event_type: str | None,
+        pressed: bool | None,
+        pre_snapshot: dict[str, Any] | None,
+        post_snapshot: dict[str, Any] | None,
+        target_snapshot: dict[str, Any] | None,
+    ) -> str:
+        if event_type != "mouse_click" or pressed is not False:
+            return default_reason
+
+        click_target = target_snapshot or post_snapshot
+        if click_target is None:
+            return default_reason
+        if self._is_confirm_button(click_target):
+            return "confirm_button"
+
+        pre_key = self._build_control_key(pre_snapshot)
+        click_key = self._build_control_key(click_target)
+        if pre_key is not None and click_key is not None and pre_key == click_key:
+            return default_reason
+        return "click_outside"
+
+    def _is_confirm_button(self, control: dict[str, Any]) -> bool:
+        normalized = self._normalize_control(control)
+        if normalized is None:
+            return False
+        ui_target = normalized.get("ui_target") or {}
+        state = normalized.get("state") or {}
+        control_type = (ui_target.get("control_type") or state.get("control_type") or "").strip().lower()
+        if control_type != "button":
+            return False
+        label_candidates = (
+            ui_target.get("control_name"),
+            ui_target.get("text"),
+            ui_target.get("label"),
+            normalized.get("value"),
+            state.get("button_text"),
+        )
+        normalized_label = " ".join(
+            part.strip().lower()
+            for part in (self._normalize_value(candidate) for candidate in label_candidates)
+            if part
+        )
+        if not normalized_label:
+            return False
+        return any(
+            token in normalized_label
+            for token in (
+                "ok",
+                "salva",
+                "save",
+                "conferma",
+                "confirm",
+                "stampa",
+                "print",
+                "cerca",
+                "search",
+                "apply",
+                "applica",
+            )
+        )
 
     def _normalize_value(self, value: Any) -> str | None:
         if value is None:

@@ -17,8 +17,10 @@ class SemanticEventBuilder:
         event_type: str,
         timestamp_utc: str,
         key_name: str | None,
+        pressed: bool | None = None,
         pre_snapshot: dict[str, Any] | None,
         post_snapshot: dict[str, Any] | None,
+        target_snapshot: dict[str, Any] | None = None,
         is_editable: Any,
     ) -> list[dict[str, Any]]:
         return self.state_manager.register_event(
@@ -26,8 +28,10 @@ class SemanticEventBuilder:
                 "event_type": event_type,
                 "timestamp_utc": timestamp_utc,
                 "key_name": key_name,
+                "pressed": pressed,
                 "pre_snapshot": pre_snapshot,
                 "post_snapshot": post_snapshot,
+                "target_snapshot": target_snapshot,
             }
         )
 
