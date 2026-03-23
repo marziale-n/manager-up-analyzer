@@ -340,6 +340,35 @@ class UIContextResolver:
         state = self._extract_control_state(wrapper, hwnd)
         return element, state
 
+    def read_uia_text(self, hwnd: int | None) -> str | None:
+        wrapper = self._get_wrapper_from_handle(hwnd)
+        if wrapper is None:
+            return None
+        value = self._first_non_empty(
+            self._safe_call(lambda: wrapper.get_value()),
+            self._safe_getattr(self._safe_getattr(wrapper, "iface_value"), "CurrentValue"),
+            self._safe_getattr(self._safe_getattr(wrapper, "iface_range_value"), "CurrentValue"),
+            self._safe_getattr(self._safe_getattr(wrapper, "iface_range_value"), "Value"),
+            self._safe_call(lambda: wrapper.selected_text()),
+            self._safe_call(lambda: wrapper.window_text()),
+            self._safe_getattr(self._safe_getattr(wrapper, "element_info"), "name"),
+        )
+        return self._normalize_text_candidate(value)
+
+    def read_native_text(self, hwnd: int | None) -> str | None:
+        hwnd = self._safe_int(hwnd)
+        if hwnd is None:
+            return None
+        class_name = self._get_class_name(hwnd)
+        state = self._capture_win32_specific_state(hwnd, class_name, self._get_window_long(hwnd, GWL_STYLE))
+        value = self._first_non_empty(
+            state.get("selected_text"),
+            state.get("edit_text"),
+            state.get("button_text"),
+            self._get_control_text(hwnd),
+        )
+        return self._normalize_text_candidate(value)
+
     # -------------------------
     # Win32 core helpers
     # -------------------------
@@ -1021,6 +1050,14 @@ class UIContextResolver:
         except Exception:
             return None
         return text or None
+
+    def _normalize_text_candidate(self, value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, list):
+            joined = ", ".join(str(item).strip() for item in value if str(item).strip())
+            return joined or None
+        return self._safe_str(value)
 
     def _first_non_empty(self, *values: Any) -> Any | None:
         for value in values:

@@ -44,18 +44,43 @@ class WinEventMonitor:
         self.window_filter = window_filter
         self.poll_interval_seconds = poll_interval_seconds
         self.enable_state_capture = enable_state_capture
+        self._lifecycle_lock = threading.Lock()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True, name="win-event-monitor")
         self._hooks: list[Any] = []
         self._callbacks: list[Any] = []
         self._state_cache: dict[int, dict[str, Any]] = {}
+        self._running = False
+        self._started = False
+        self._stopped = False
 
     def start(self) -> None:
-        self._thread.start()
+        with self._lifecycle_lock:
+            if self._started:
+                return
+            self._running = True
+            self._started = True
+            self._stopped = False
+            self._thread.start()
 
     def stop(self) -> None:
-        self._stop.set()
-        self._thread.join(timeout=2)
+        with self._lifecycle_lock:
+            if not self._started or self._stopped:
+                return
+            self._running = False
+            self._stopped = True
+            self._stop.set()
+            hooks = list(self._hooks)
+            self._hooks.clear()
+
+        for hook in hooks:
+            try:
+                user32.UnhookWinEvent(hook)
+            except Exception:
+                pass
+
+        if self._thread.is_alive():
+            self._thread.join(timeout=2)
 
     def _run(self) -> None:
         resolver_context = UIContextResolver()
@@ -74,6 +99,9 @@ class WinEventMonitor:
 
         def make_callback() -> Any:
             def _callback(h_win_event_hook, event, hwnd, id_object, id_child, event_thread, event_time):
+                if not self._running:
+                    return
+                
                 raw_hwnd = int(hwnd) if hwnd else None
                 root = build_window_identity(raw_hwnd)
                 if self.window_filter is not None and not self.window_filter.matches_window(root):
@@ -154,20 +182,30 @@ class WinEventMonitor:
                     WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
                 )
                 if hook:
-                    self._callbacks.append(callback)
-                    self._hooks.append(hook)
+                    with self._lifecycle_lock:
+                        if self._stopped:
+                            try:
+                                user32.UnhookWinEvent(hook)
+                            except Exception:
+                                pass
+                        else:
+                            self._callbacks.append(callback)
+                            self._hooks.append(hook)
 
             while not self._stop.is_set():
                 pump_messages_once()
                 time.sleep(self.poll_interval_seconds)
         finally:
-            for hook in self._hooks:
+            with self._lifecycle_lock:
+                hooks = list(self._hooks)
+                self._hooks.clear()
+                self._callbacks.clear()
+
+            for hook in hooks:
                 try:
                     user32.UnhookWinEvent(hook)
                 except Exception:
                     pass
-            self._hooks.clear()
-            self._callbacks.clear()
 
     def _diff_state(
         self,

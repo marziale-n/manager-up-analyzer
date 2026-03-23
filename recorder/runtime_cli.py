@@ -113,14 +113,6 @@ def run_session(
         hwnd=hwnd,
     )
 
-    runtime_manager = RuntimeObserverManager(
-        output_dir=str(base_output_dir),
-        session_id=shared_session_id,
-        window_filter=window_filter,
-        cpu_threshold=cpu_threshold,
-        enable_state_capture=enable_state_capture,
-    )
-
     recorder: InteractionRecorder | None = None
     if not runtime_observer_only:
         recorder = InteractionRecorder(
@@ -132,6 +124,15 @@ def run_session(
             strict_window_filter=True,
             enable_state_capture=enable_state_capture,
         )
+
+    runtime_manager = RuntimeObserverManager(
+        output_dir=str(base_output_dir),
+        session_id=shared_session_id,
+        window_filter=window_filter,
+        cpu_threshold=cpu_threshold,
+        enable_state_capture=enable_state_capture,
+        event_listeners=[recorder.on_runtime_event] if recorder is not None else None,
+    )
 
     print(f"[RUNTIME] shared session id: {shared_session_id}")
     if window_title:

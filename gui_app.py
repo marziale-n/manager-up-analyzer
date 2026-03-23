@@ -7,6 +7,8 @@ from recorder.window_selector import WindowInfo, list_open_windows, refresh_wind
 
 
 class RecorderApp:
+    ALL_WINDOWS_OPTION = "All running applications"
+
     def __init__(self, root):
         self.root = root
         self.root.title("AI Recorder")
@@ -29,7 +31,7 @@ class RecorderApp:
         frame.pack(fill="both", expand=True)
 
         # Window selector
-        ttk.Label(frame, text="Running application").grid(row=0, column=0, sticky="w")
+        ttk.Label(frame, text="Running application (optional)").grid(row=0, column=0, sticky="w")
 
         selector_frame = ttk.Frame(frame)
         selector_frame.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(4, 12))
@@ -80,20 +82,24 @@ class RecorderApp:
         frame.columnconfigure(1, weight=1)
 
     def _refresh_windows(self):
+        previous_selection = self.selected_window_var.get().strip()
+
         try:
             self.windows = list_open_windows()
         except Exception as e:
             messagebox.showerror("Error", f"Unable to load running windows:\n{e}")
             return
 
-        values = [item.display_name for item in self.windows]
+        values = [self.ALL_WINDOWS_OPTION, *[item.display_name for item in self.windows]]
         self.window_combo["values"] = values
 
-        if values:
-            self.window_combo.current(0)
-            self.selected_window_var.set(values[0])
-        else:
-            self.selected_window_var.set("")
+        if previous_selection in values:
+            self.selected_window_var.set(previous_selection)
+            self.window_combo.current(values.index(previous_selection))
+            return
+
+        self.window_combo.current(0)
+        self.selected_window_var.set(self.ALL_WINDOWS_OPTION)
 
     def _choose_output_dir(self):
         selected = filedialog.askdirectory(initialdir=self.output_dir_var.get())
@@ -102,7 +108,7 @@ class RecorderApp:
 
     def _get_selected_window(self) -> WindowInfo | None:
         selected_display = self.selected_window_var.get().strip()
-        if not selected_display:
+        if not selected_display or selected_display == self.ALL_WINDOWS_OPTION:
             return None
 
         for item in self.windows:
@@ -117,28 +123,29 @@ class RecorderApp:
         selected_window = self._get_selected_window()
         output_dir = str(Path(self.output_dir_var.get().strip()).resolve())
 
-        if selected_window is None:
-            messagebox.showerror("Error", "Select a running application.")
-            return
-
-        refreshed_window = refresh_window_reference(selected_window)
-        if refreshed_window is None:
-            messagebox.showerror(
-                "Error",
-                "The selected application is no longer available. Refresh the list and select it again.",
-            )
-            return
-
-        selected_window = refreshed_window
-
         config = {
-            "window_title": selected_window.title,
-            "process_name": selected_window.process_name,
-            "pid": selected_window.pid,
-            "hwnd": selected_window.hwnd,
             "output_dir": output_dir,
             "runtime_observer_only": self.runtime_only_var.get(),
         }
+
+        if selected_window is not None:
+            refreshed_window = refresh_window_reference(selected_window)
+            if refreshed_window is None:
+                messagebox.showerror(
+                    "Error",
+                    "The selected application is no longer available. Refresh the list and select it again.",
+                )
+                return
+
+            selected_window = refreshed_window
+            config.update(
+                {
+                    "window_title": selected_window.title,
+                    "process_name": selected_window.process_name,
+                    "pid": selected_window.pid,
+                    "hwnd": selected_window.hwnd,
+                }
+            )
 
         try:
             self.controller.start(config)
@@ -146,9 +153,12 @@ class RecorderApp:
             messagebox.showerror("Start error", str(e))
             return
 
-        self.status_var.set(
-            f"Recording: {selected_window.process_name} — {selected_window.title}"
-        )
+        if selected_window is None:
+            self.status_var.set("Recording: all running applications")
+        else:
+            self.status_var.set(
+                f"Recording: {selected_window.process_name} — {selected_window.title}"
+            )
         self.start_btn.config(state="disabled")
         self.stop_btn.config(state="normal")
 

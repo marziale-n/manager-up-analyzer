@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from recorder.semantic_events import SemanticEventBuilder
+from recorder.state_manager import StateManager
 
 
 def editable_snapshot(
@@ -53,7 +54,7 @@ def is_editable(ui_target: dict[str, object] | None, state: dict[str, object] | 
 
 class SemanticEventBuilderTests(unittest.TestCase):
     def test_commits_on_focus_loss(self) -> None:
-        builder = SemanticEventBuilder()
+        builder = SemanticEventBuilder(StateManager())
 
         self.assertEqual(
             builder.process_event(
@@ -92,9 +93,11 @@ class SemanticEventBuilderTests(unittest.TestCase):
         self.assertEqual(events[0]["previous_value"], None)
         self.assertEqual(events[0]["final_value"], "abc")
         self.assertEqual(events[0]["commit_reason"], "focus_lost")
+        self.assertEqual(events[0]["value_source"], "payload")
+        self.assertIn("control_key", events[0])
 
     def test_commits_on_enter_and_restarts_session(self) -> None:
-        builder = SemanticEventBuilder()
+        builder = SemanticEventBuilder(StateManager())
 
         builder.process_event(
             event_type="mouse_click",
@@ -137,6 +140,7 @@ class SemanticEventBuilderTests(unittest.TestCase):
         self.assertEqual(len(blur_events), 1)
         self.assertEqual(blur_events[0]["previous_value"], "ciao")
         self.assertEqual(blur_events[0]["final_value"], "ciaox")
+        self.assertEqual(blur_events[0]["value_source"], "payload")
 
 
 if __name__ == "__main__":

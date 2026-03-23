@@ -13,6 +13,7 @@ from recorder.context import UIContextResolver, dataclass_to_dict
 from recorder.filters import WindowFilter
 from recorder.models import Event
 from recorder.semantic_events import SemanticEventBuilder
+from recorder.state_manager import StateManager
 from recorder.storage import SessionWriter
 from recorder.ui_resolver import UIElementResolver
 from recorder.utils import new_id, utc_now_iso
@@ -39,7 +40,12 @@ class InteractionRecorder:
         self.writer = SessionWriter(self.session_dir)
         self.context = UIContextResolver()
         self.ui_resolver = UIElementResolver(self.context)
-        self.semantic_builder = SemanticEventBuilder()
+        self.state_manager = StateManager(
+            ui_automation_value_provider=self._read_uia_value,
+            native_value_provider=self._read_native_value,
+            debug_logger=self._debug,
+        )
+        self.semantic_builder = SemanticEventBuilder(self.state_manager)
         self.event_queue: queue.Queue[dict[str, Any]] = queue.Queue()
         self.stop_event = threading.Event()
         self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
@@ -63,6 +69,9 @@ class InteractionRecorder:
         self.dropped_by_filter = 0
         self.matched_filter_total = 0
         self.recorded_total = 0
+
+    def on_runtime_event(self, payload: dict[str, Any]) -> None:
+        self.state_manager.on_runtime_event(payload)
 
     def _debug(self, message: str) -> None:
         if not self.debug:
@@ -558,6 +567,19 @@ class InteractionRecorder:
             self.writer.append_event(event)
             self.stats["input_commit"] += 1
             self.recorded_total += 1
+
+    def _read_uia_value(self, control: dict[str, Any]) -> str | None:
+        state = control.get("state")
+        element = control.get("element")
+        payload_value = self.ui_resolver.extract_text_value(state=state, element=element)
+        if payload_value is not None:
+            return payload_value
+        hwnd = (control.get("ui_target") or {}).get("handle") or control.get("hwnd")
+        return self.context.read_uia_text(hwnd)
+
+    def _read_native_value(self, control: dict[str, Any]) -> str | None:
+        hwnd = (control.get("ui_target") or {}).get("handle") or control.get("hwnd")
+        return self.context.read_native_text(hwnd)
 
     def _flush_pending_semantic_events(self) -> None:
         try:
