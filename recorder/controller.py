@@ -27,6 +27,11 @@ class RecorderController:
                     process_name=config.get("process_name"),
                     pid=config.get("pid"),
                     hwnd=config.get("hwnd"),
+                    enable_visual_checkpoints=config.get("enable_visual_checkpoints", True),
+                    disable_visual_checkpoints=config.get("disable_visual_checkpoints", False),
+                    visual_checkpoint_on_click=config.get("visual_checkpoint_on_click"),
+                    visual_checkpoint_on_input_commit=config.get("visual_checkpoint_on_input_commit"),
+                    visual_checkpoint_on_runtime_change=config.get("visual_checkpoint_on_runtime_change"),
                 )
             finally:
                 self._running = False

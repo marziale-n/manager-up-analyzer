@@ -19,6 +19,7 @@ class RecorderApp:
         self.selected_window_var = tk.StringVar()
         self.output_dir_var = tk.StringVar(value=str(Path.cwd() / "output"))
         self.runtime_only_var = tk.BooleanVar(value=False)
+        self.disable_visual_checkpoints_var = tk.BooleanVar(value=False)
         self.status_var = tk.StringVar(value="Idle")
 
         self.windows: list[WindowInfo] = []
@@ -62,11 +63,17 @@ class RecorderApp:
             frame,
             text="Runtime observer only",
             variable=self.runtime_only_var
-        ).grid(row=4, column=0, columnspan=3, sticky="w", pady=(0, 16))
+        ).grid(row=4, column=0, columnspan=3, sticky="w", pady=(0, 6))
+
+        ttk.Checkbutton(
+            frame,
+            text="Disable visual checkpoints",
+            variable=self.disable_visual_checkpoints_var
+        ).grid(row=5, column=0, columnspan=3, sticky="w", pady=(0, 16))
 
         # Buttons
         btn_frame = ttk.Frame(frame)
-        btn_frame.grid(row=5, column=0, columnspan=3, sticky="w")
+        btn_frame.grid(row=6, column=0, columnspan=3, sticky="w")
 
         self.start_btn = ttk.Button(btn_frame, text="Start", command=self._start)
         self.start_btn.pack(side="left")
@@ -75,8 +82,8 @@ class RecorderApp:
         self.stop_btn.pack(side="left", padx=8)
 
         # Status
-        ttk.Label(frame, text="Status").grid(row=6, column=0, sticky="w", pady=(20, 0))
-        ttk.Label(frame, textvariable=self.status_var).grid(row=7, column=0, sticky="w")
+        ttk.Label(frame, text="Status").grid(row=7, column=0, sticky="w", pady=(20, 0))
+        ttk.Label(frame, textvariable=self.status_var).grid(row=8, column=0, sticky="w")
 
         frame.columnconfigure(0, weight=1)
         frame.columnconfigure(1, weight=1)
@@ -126,6 +133,7 @@ class RecorderApp:
         config = {
             "output_dir": output_dir,
             "runtime_observer_only": self.runtime_only_var.get(),
+            "disable_visual_checkpoints": self.disable_visual_checkpoints_var.get(),
         }
 
         if selected_window is not None:

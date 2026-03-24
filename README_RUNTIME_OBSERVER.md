@@ -37,8 +37,10 @@ Runtime events now include, when available:
 - `control_state`: current control snapshot
 - `previous_control_state`: previous snapshot cached for the same control
 - `control_state_changes`: top-level diff between previous and current snapshot
+- `visual_checkpoint`: screenshot finestra e crop controllo sui runtime event significativi; il layer è attivo di default
 
 These extra control snapshots are disabled by default and are enabled only with `--enable-state-capture`, because some legacy desktop applications may react badly to deep control inspection.
+The visual fallback layer is enabled by default and can be disabled with `--disable-visual-checkpoints` or from the GUI.
 
 ## Usage
 Run full stack (observer + existing recorder):
@@ -59,6 +61,12 @@ Run with an exact target selected by GUI or passed manually:
 python main.py --window-title "Calcolatrice" --process-name ApplicationFrameHost.exe --pid 3672 --hwnd 263154
 ```
 
+Run with runtime visual checkpoints disabled:
+
+```powershell
+python main.py --window-title "Calcolatrice" --disable-visual-checkpoints
+```
+
 ## How targeting works now
 
 - `gui_app.py` and `RecorderApp.exe` enumerate top-level windows and expose the selected `hwnd`, `pid`, `process_name` and title
@@ -67,7 +75,9 @@ python main.py --window-title "Calcolatrice" --process-name ApplicationFrameHost
 - `WinEventMonitor` emits only events whose resolved root window matches the selected target
 - `BusyMonitor` prefers the selected `hwnd`/`pid` instead of monitoring only the current foreground app
 - recorder and runtime observer write into the same session directory and share the same session id
+- when visual checkpoints are enabled, both components also share the same artifact folders and a session-wide event sequence used in image filenames
 
 ## Important note
 The observer is additive. It is designed to run alongside the interaction recorder and does not replace it.
 When `--runtime-observer-only` is used, only `runtime_timeline.jsonl` and `runtime_metadata.json` are produced for that session.
+If a screenshot cannot be captured, the runtime event still gets written and the visual payload reports `capture_success=false`.

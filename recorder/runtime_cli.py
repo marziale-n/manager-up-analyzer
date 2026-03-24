@@ -10,6 +10,7 @@ from threading import Event
 from recorder.filters import WindowFilter
 from recorder.recorder import InteractionRecorder
 from recorder.runtime_observer.runtime_manager import RuntimeObserverManager
+from recorder.visual_capture import EventSequence, VisualCheckpointConfig
 from recorder.window_selector import WindowInfo as SelectedWindowInfo
 from recorder.window_selector import refresh_window_reference
 
@@ -87,6 +88,11 @@ def run_session(
     cpu_threshold: float = 12.0,
     session_id: str | None = None,
     enable_state_capture: bool = False,
+    enable_visual_checkpoints: bool = True,
+    disable_visual_checkpoints: bool = False,
+    visual_checkpoint_on_click: bool | None = None,
+    visual_checkpoint_on_input_commit: bool | None = None,
+    visual_checkpoint_on_runtime_change: bool | None = None,
 ) -> str:
     stop_event = stop_event or Event()
 
@@ -105,6 +111,13 @@ def run_session(
     base_output_dir.mkdir(parents=True, exist_ok=True)
 
     shared_session_id = session_id or make_session_id()
+    visual_config = VisualCheckpointConfig(
+        enabled=enable_visual_checkpoints and not disable_visual_checkpoints,
+        on_click=visual_checkpoint_on_click,
+        on_input_commit=visual_checkpoint_on_input_commit,
+        on_runtime_change=visual_checkpoint_on_runtime_change,
+    )
+    visual_sequence = EventSequence()
     window_filter = build_window_filter(
         window_title=window_title,
         window_title_regex=window_title_regex,
@@ -123,6 +136,8 @@ def run_session(
             external_stop_event=stop_event,
             strict_window_filter=True,
             enable_state_capture=enable_state_capture,
+            visual_checkpoint_config=visual_config,
+            visual_event_sequence=visual_sequence,
         )
 
     runtime_manager = RuntimeObserverManager(
@@ -131,6 +146,8 @@ def run_session(
         window_filter=window_filter,
         cpu_threshold=cpu_threshold,
         enable_state_capture=enable_state_capture,
+        visual_checkpoint_config=visual_config,
+        visual_event_sequence=visual_sequence,
         event_listeners=[recorder.on_runtime_event] if recorder is not None else None,
     )
 
@@ -143,6 +160,13 @@ def run_session(
         print(f"[RUNTIME] target pid: {pid}")
     if hwnd is not None:
         print(f"[RUNTIME] target hwnd: {hwnd}")
+    if visual_config.enabled:
+        print(
+            "[RUNTIME] visual checkpoints enabled: "
+            f"click={visual_config.click_enabled()} "
+            f"input_commit={visual_config.input_commit_enabled()} "
+            f"runtime_change={visual_config.runtime_change_enabled()}"
+        )
 
     try:
         runtime_manager.start()
@@ -180,6 +204,11 @@ def main(
     cpu_threshold: float = 12.0,
     session_id: str | None = None,
     enable_state_capture: bool = False,
+    enable_visual_checkpoints: bool = True,
+    disable_visual_checkpoints: bool = False,
+    visual_checkpoint_on_click: bool | None = None,
+    visual_checkpoint_on_input_commit: bool | None = None,
+    visual_checkpoint_on_runtime_change: bool | None = None,
 ) -> str:
     return run_session(
         window_title=window_title,
@@ -194,6 +223,11 @@ def main(
         cpu_threshold=cpu_threshold,
         session_id=session_id,
         enable_state_capture=enable_state_capture,
+        enable_visual_checkpoints=enable_visual_checkpoints,
+        disable_visual_checkpoints=disable_visual_checkpoints,
+        visual_checkpoint_on_click=visual_checkpoint_on_click,
+        visual_checkpoint_on_input_commit=visual_checkpoint_on_input_commit,
+        visual_checkpoint_on_runtime_change=visual_checkpoint_on_runtime_change,
     )
 
 
@@ -210,6 +244,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--runtime-observer-only", action="store_true")
     parser.add_argument("--session-id", default=None)
     parser.add_argument("--enable-state-capture", action="store_true")
+    parser.add_argument("--enable-visual-checkpoints", action="store_true")
+    parser.add_argument("--disable-visual-checkpoints", action="store_true")
+    parser.add_argument("--visual-checkpoint-on-click", action="store_true")
+    parser.add_argument("--visual-checkpoint-on-input-commit", action="store_true")
+    parser.add_argument("--visual-checkpoint-on-runtime-change", action="store_true")
     return parser
 
 
@@ -229,6 +268,11 @@ def cli(argv: list[str] | None = None) -> int:
         cpu_threshold=args.cpu_threshold,
         session_id=args.session_id,
         enable_state_capture=args.enable_state_capture,
+        enable_visual_checkpoints=True,
+        disable_visual_checkpoints=args.disable_visual_checkpoints,
+        visual_checkpoint_on_click=True if args.visual_checkpoint_on_click else None,
+        visual_checkpoint_on_input_commit=True if args.visual_checkpoint_on_input_commit else None,
+        visual_checkpoint_on_runtime_change=True if args.visual_checkpoint_on_runtime_change else None,
     )
     return 0
 

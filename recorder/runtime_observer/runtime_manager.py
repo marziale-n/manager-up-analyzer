@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from recorder.filters import WindowFilter
+from recorder.visual_capture import EventSequence, VisualCaptureManager, VisualCheckpointConfig
 
 from .busy_monitor import BusyMonitor
 from .sink import JsonlEventSink
@@ -22,6 +23,8 @@ class RuntimeObserverManager:
         target_window_regex: str | None = None,
         cpu_threshold: float = 8.0,
         enable_state_capture: bool = False,
+        visual_checkpoint_config: VisualCheckpointConfig | None = None,
+        visual_event_sequence: EventSequence | None = None,
         event_listeners: list[Callable[[dict[str, Any]], None]] | None = None,
     ) -> None:
         self.session_id = session_id or str(uuid.uuid4())
@@ -33,6 +36,12 @@ class RuntimeObserverManager:
         self.window_filter = window_filter or WindowFilter(title_regex=target_window_regex)
         self.cpu_threshold = cpu_threshold
         self.enable_state_capture = enable_state_capture
+        self.visual_checkpoint_config = visual_checkpoint_config or VisualCheckpointConfig()
+        self.visual_capture = VisualCaptureManager(
+            session_dir=self.session_dir,
+            config=self.visual_checkpoint_config,
+            event_sequence=visual_event_sequence,
+        )
         self.event_listeners = list(event_listeners or [])
         self.started_at_utc = self._utc_now()
         self._state_lock = threading.RLock()
@@ -61,6 +70,7 @@ class RuntimeObserverManager:
                     "window_filter": self.window_filter.to_metadata(),
                     "cpu_threshold": self.cpu_threshold,
                     "enable_state_capture": self.enable_state_capture,
+                    "visual_checkpoints": self.visual_checkpoint_config.to_metadata(),
                     "timeline_file": str(self.timeline_file),
                 },
                 ensure_ascii=False,
@@ -74,6 +84,20 @@ class RuntimeObserverManager:
             if not self._started or self._stopping or self._stopped:
                 return
             payload.setdefault("session_id", self.session_id)
+            if self.visual_capture.should_capture_runtime(payload):
+                checkpoint = self.visual_capture.capture_for_event(
+                    event_type=str(payload.get("event_type") or "runtime_event"),
+                    timestamp_utc=payload.get("timestamp_utc"),
+                    ui_target=payload.get("ui_target"),
+                    window_info=payload.get("window"),
+                    hwnd=payload.get("hwnd"),
+                    window_title=payload.get("window_title"),
+                    process_name=payload.get("process_name"),
+                    capture_stage="after",
+                    metadata={"channel": payload.get("category")},
+                )
+                if checkpoint is not None:
+                    payload["visual_checkpoint"] = checkpoint
             self.sink.write(payload)
         for listener in self.event_listeners:
             try:

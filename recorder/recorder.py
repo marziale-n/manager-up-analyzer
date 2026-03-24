@@ -17,6 +17,7 @@ from recorder.state_manager import StateManager
 from recorder.storage import SessionWriter
 from recorder.ui_resolver import UIElementResolver
 from recorder.utils import new_id, utc_now_iso
+from recorder.visual_capture import EventSequence, VisualCaptureManager, VisualCheckpointConfig
 
 
 class InteractionRecorder:
@@ -29,6 +30,8 @@ class InteractionRecorder:
         external_stop_event: threading.Event | None = None,
         strict_window_filter: bool | None = None,
         enable_state_capture: bool = False,
+        visual_checkpoint_config: VisualCheckpointConfig | None = None,
+        visual_event_sequence: EventSequence | None = None,
     ) -> None:
         self.session_id = session_id or new_id()
         self.session_dir = Path(output_dir) / self.session_id
@@ -36,6 +39,7 @@ class InteractionRecorder:
         self.mouse_move_interval_seconds = mouse_move_interval_seconds
         self.external_stop_event = external_stop_event
         self.enable_state_capture = enable_state_capture
+        self.visual_checkpoint_config = visual_checkpoint_config or VisualCheckpointConfig()
 
         self.writer = SessionWriter(self.session_dir)
         self.context = UIContextResolver()
@@ -46,6 +50,11 @@ class InteractionRecorder:
             debug_logger=self._debug,
         )
         self.semantic_builder = SemanticEventBuilder(self.state_manager)
+        self.visual_capture = VisualCaptureManager(
+            session_dir=self.session_dir,
+            config=self.visual_checkpoint_config,
+            event_sequence=visual_event_sequence,
+        )
         self.event_queue: queue.Queue[dict[str, Any]] = queue.Queue()
         self.stop_event = threading.Event()
         self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
@@ -101,7 +110,8 @@ class InteractionRecorder:
                 "started_at_utc": self.started_at,
                 "window_filter": self.window_filter.to_metadata(),
                 "strict_window_filter": self.strict_window_filter,
-                "notes": "MVP without screenshots and visual fallback",
+                "visual_checkpoints": self.visual_checkpoint_config.to_metadata(),
+                "notes": "MVP with optional visual fallback checkpoints",
             }
         )
 
@@ -425,6 +435,7 @@ class InteractionRecorder:
             event_type=kind,
             payload=payload,
         )
+        self._attach_visual_checkpoint(raw_event)
 
         self.writer.append_event(raw_event)
         self.stats[kind] += 1
@@ -592,9 +603,32 @@ class InteractionRecorder:
                 event_type="input_commit",
                 payload=payload,
             )
+            self._attach_visual_checkpoint(event)
             self.writer.append_event(event)
             self.stats["input_commit"] += 1
             self.recorded_total += 1
+
+    def _attach_visual_checkpoint(self, event: Event) -> None:
+        if event.event_type == "input_commit":
+            should_capture = self.visual_capture.should_capture_semantic(event.event_type)
+        else:
+            should_capture = self.visual_capture.should_capture_raw(event.event_type, event.payload)
+        if not should_capture:
+            return
+
+        payload = self.visual_capture.capture_for_event(
+            event_type=event.event_type,
+            timestamp_utc=event.timestamp_utc,
+            ui_target=event.payload.get("ui_target"),
+            window_info=event.payload.get("window"),
+            hwnd=event.payload.get("hwnd"),
+            window_title=event.payload.get("window_title"),
+            process_name=event.payload.get("process_name"),
+            capture_stage="after",
+            metadata={"session_id": event.session_id},
+        )
+        if payload is not None:
+            event.payload["visual_checkpoint"] = payload
 
     def _read_uia_value(self, control: dict[str, Any]) -> str | None:
         state = control.get("state")

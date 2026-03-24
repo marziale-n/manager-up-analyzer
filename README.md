@@ -17,12 +17,11 @@ MVP in Python per Windows che registra le interazioni utente su una finestra tar
 - i click mouse vengono arricchiti con `ui_target`, cioè il controllo realmente colpito con nome/id/tipo/testo/bounds e contesto griglia quando disponibile
 - i controlli editabili producono eventi semantici `input_commit` con `previous_value` e `final_value` consolidato quando il focus cambia o viene premuto `Enter`
 - gli eventi significativi del runtime observer includono lo stesso layer `ui_target`, così focus, change e value change usano la stessa semantica del recorder raw
+- salva di default visual checkpoints con screenshot della finestra target e crop del controllo, pensati come fallback di verità visiva per applicazioni legacy VB6 / Win32
 
 ## Limitazioni attuali
 
 - il matching è molto più robusto, ma alcuni applicativi molto custom o protetti possono comunque esporre metadati incompleti a Win32/UI Automation
-- non salva screenshot
-- non implementa fallback visuale
 - non intercetta in modo perfetto ogni applicativo custom/non-UIA
 - i tasti vengono loggati a livello di pressione/rilascio; la ricostruzione del testo digitato è solo basilare
 
@@ -35,6 +34,9 @@ Per ogni sessione crea una cartella dentro `output/` con:
 - `summary.json`: piccolo riepilogo finale
 - `runtime_timeline.jsonl`: timeline eventi del runtime observer
 - `runtime_metadata.json`: metadati del runtime observer
+- `visual_artifacts.jsonl`: manifest opzionale dei visual checkpoints generati
+- `artifacts/screenshots/`: screenshot finestra top-level
+- `artifacts/crops/`: crop del controllo coinvolto quando i bounds sono affidabili
 
 Ogni evento contiene, quando disponibile:
 
@@ -51,6 +53,7 @@ Ogni evento contiene, quando disponibile:
 - differenze tra stato prima/dopo (`target_state_changes`, `focused_state_changes`)
 - stato modificatori tastiera
 - semplice aggregazione del testo digitato
+- payload additivo `visual_checkpoint` con path relativi, bounds, hash e stato della cattura
 
 ## Requisiti
 
@@ -92,6 +95,18 @@ Per un target più preciso puoi passare anche processo, PID e handle:
 
 ```powershell
 python main.py --window-title "Notepad" --process-name notepad.exe --pid 1234 --hwnd 987654
+```
+
+Il fallback visuale è attivo di default sui principali eventi:
+
+```powershell
+python main.py --window-title "Notepad"
+```
+
+Se vuoi disabilitarlo da CLI:
+
+```powershell
+python main.py --window-title "Notepad" --disable-visual-checkpoints
 ```
 
 Per eseguire solo il runtime observer:
@@ -208,6 +223,54 @@ Commit del valore finale:
 }
 ```
 
+Evento arricchito con visual checkpoint:
+
+```json
+{
+  "event_type": "mouse_click",
+  "timestamp_utc": "2026-03-23T13:48:20.120000+00:00",
+  "payload": {
+    "x": 542,
+    "y": 312,
+    "button": "Button.left",
+    "pressed": false,
+    "window_title": "Visualizzazione e Stampa Partitari di Magazzino (A00504.01)",
+    "process_name": "A00504.exe",
+    "hwnd": 460600,
+    "ui_target": {
+      "control_name": "OK",
+      "control_id": "1012",
+      "control_type": "Button",
+      "label": "OK",
+      "text": "OK",
+      "bounds": [500, 290, 580, 330]
+    },
+    "visual_checkpoint": {
+      "enabled": true,
+      "event_sequence": 123,
+      "window_image_path": "artifacts/screenshots/000123_mouse_click_window.png",
+      "control_image_path": "artifacts/crops/000123_mouse_click_control.png",
+      "capture_scope": "window+control",
+      "capture_stage": "after",
+      "window_bounds": [420, 180, 980, 640],
+      "control_bounds": [500, 290, 580, 330],
+      "capture_success": true,
+      "capture_error": null,
+      "window_image_width": 560,
+      "window_image_height": 460,
+      "window_image_sha256": "f07d6c2f2b2d5a4ed7f7f8692aa4f2f3be7858d6d4b7f217c8f8e1c0e55b998d",
+      "control_image_width": 80,
+      "control_image_height": 40,
+      "control_image_sha256": "7107b6d4bd1f0b8d35e5f5f99eb9bd0b0cfd7d2c8d5bf65a9ce14d458be2db21",
+      "window_title": "Visualizzazione e Stampa Partitari di Magazzino (A00504.01)",
+      "process_name": "A00504.exe",
+      "hwnd": 460600,
+      "control_identity_key": "1012"
+    }
+  }
+}
+```
+
 ## Note operative
 
 - Se l'app target gira come amministratore, conviene eseguire anche questo recorder come amministratore.
@@ -219,6 +282,11 @@ Commit del valore finale:
 - La generazione degli eventi `input_commit` è separata in `recorder/semantic_events.py`, così la cattura raw e la semantica restano disaccoppiate.
 - Il runtime observer arricchisce gli eventi di sistema con `element`, `control_state`, `previous_control_state` e `control_state_changes`, così i `value_change` e `state_change` sono più leggibili.
 - La raccolta estesa dello stato dei controlli e dei diff prima/dopo è disponibile solo in modalità esplicita `--enable-state-capture`. Di default è disattivata perché su alcune applicazioni legacy può provocare effetti collaterali indesiderati.
+- I visual checkpoints sono attivi di default. Catturano una sola immagine `after` per evento rilevante: click mouse rilasciato, `input_commit`, apertura dialog/finestra e runtime `value_change` / `state_change` significativi.
+- Da GUI puoi disabilitarli con la checkbox `Disable visual checkpoints`; da CLI puoi usare `--disable-visual-checkpoints`.
+- Se i bounds del controllo non sono affidabili viene salvata solo la finestra; se fallisce anche la cattura finestra il recorder continua e il payload riporta `capture_success=false`.
+- In questa fase non vengono eseguiti OCR o analisi AI delle immagini: il layer serve solo a catturare, salvare e collegare l’evidenza visiva ai log.
+- Impatto atteso: lieve overhead sui soli eventi chiave. Evitata volutamente la cattura su ogni `key_down` per non introdurre rumore o fragilità.
 
 ## Prossimi step consigliati
 
