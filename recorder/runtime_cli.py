@@ -88,8 +88,8 @@ def run_session(
     mouse_move_interval: float = 0.25,
     cpu_threshold: float = 12.0,
     session_id: str | None = None,
-    enable_state_capture: bool = False,
-    enable_visual_checkpoints: bool = True,
+    disable_logging: bool = True,
+    disable_state_capture: bool = False,
     disable_visual_checkpoints: bool = False,
     visual_checkpoint_on_click: bool | None = None,
     visual_checkpoint_on_input_commit: bool | None = None,
@@ -115,7 +115,7 @@ def run_session(
     shared_session_id = session_id or make_session_id()
     semantic_config = semantic_enrichment_config or SemanticEnrichmentConfig()
     visual_config = VisualCheckpointConfig(
-        enabled=enable_visual_checkpoints and not disable_visual_checkpoints,
+        enabled=not disable_visual_checkpoints,
         on_click=visual_checkpoint_on_click,
         on_input_commit=visual_checkpoint_on_input_commit,
         on_runtime_change=visual_checkpoint_on_runtime_change,
@@ -139,7 +139,8 @@ def run_session(
             session_id=shared_session_id,
             external_stop_event=stop_event,
             strict_window_filter=True,
-            enable_state_capture=enable_state_capture,
+            disable_logging=disable_logging,
+            disable_state_capture=disable_state_capture,
             visual_checkpoint_config=visual_config,
             visual_event_sequence=visual_sequence,
             semantic_enrichment_config=semantic_config,
@@ -151,7 +152,7 @@ def run_session(
         session_id=shared_session_id,
         window_filter=window_filter,
         cpu_threshold=cpu_threshold,
-        enable_state_capture=enable_state_capture,
+        disable_state_capture=disable_state_capture,
         visual_checkpoint_config=visual_config,
         visual_event_sequence=visual_sequence,
         event_listeners=[recorder.on_runtime_event] if recorder is not None else None,
@@ -211,8 +212,8 @@ def main(
     mouse_move_interval: float = 0.25,
     cpu_threshold: float = 12.0,
     session_id: str | None = None,
-    enable_state_capture: bool = False,
-    enable_visual_checkpoints: bool = True,
+    disable_logging: bool = True,
+    disable_state_capture: bool = False,
     disable_visual_checkpoints: bool = False,
     visual_checkpoint_on_click: bool | None = None,
     visual_checkpoint_on_input_commit: bool | None = None,
@@ -231,8 +232,8 @@ def main(
         mouse_move_interval=mouse_move_interval,
         cpu_threshold=cpu_threshold,
         session_id=session_id,
-        enable_state_capture=enable_state_capture,
-        enable_visual_checkpoints=enable_visual_checkpoints,
+        disable_logging=disable_logging,
+        disable_state_capture=disable_state_capture,
         disable_visual_checkpoints=disable_visual_checkpoints,
         visual_checkpoint_on_click=visual_checkpoint_on_click,
         visual_checkpoint_on_input_commit=visual_checkpoint_on_input_commit,
@@ -253,8 +254,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cpu-threshold", type=float, default=12.0)
     parser.add_argument("--runtime-observer-only", action="store_true")
     parser.add_argument("--session-id", default=None)
-    parser.add_argument("--enable-state-capture", action="store_true")
-    parser.add_argument("--enable-visual-checkpoints", action="store_true")
+    parser.add_argument("--disable-state-capture", action="store_true")
     parser.add_argument("--disable-visual-checkpoints", action="store_true")
     parser.add_argument("--visual-checkpoint-on-click", action="store_true")
     parser.add_argument("--visual-checkpoint-on-input-commit", action="store_true")
@@ -295,8 +295,7 @@ def cli(argv: list[str] | None = None) -> int:
         mouse_move_interval=args.mouse_move_interval,
         cpu_threshold=args.cpu_threshold,
         session_id=args.session_id,
-        enable_state_capture=args.enable_state_capture,
-        enable_visual_checkpoints=True,
+        disable_state_capture=args.disable_state_capture,
         disable_visual_checkpoints=args.disable_visual_checkpoints,
         visual_checkpoint_on_click=True if args.visual_checkpoint_on_click else None,
         visual_checkpoint_on_input_commit=True if args.visual_checkpoint_on_input_commit else None,

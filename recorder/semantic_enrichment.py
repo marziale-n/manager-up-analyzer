@@ -36,6 +36,14 @@ class SemanticEnricher:
     DIALOG_CLASS_NAMES = {"#32770", "thunderrt6formdc"}
     DIALOG_OPEN_EVENTS = {"dialog_start"}
     DIALOG_CLOSE_EVENTS = {"dialog_end"}
+    STATEFUL_RUNTIME_EVENTS = {
+        "dialog_end",
+        "dialog_start",
+        "foreground_changed",
+        "object_focus",
+        "object_statechange",
+        "object_valuechange",
+    }
     UI_CHECKPOINT_EVENTS = {
         "dialog_start",
         "dialog_end",
@@ -141,6 +149,7 @@ class SemanticEnricher:
         timestamp_utc: str | None,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
+        runtime_event_type = str(payload.get("event_type") or "")
         before_snapshot = {
             "ui_target": payload.get("ui_target"),
             "state": payload.get("previous_control_state"),
@@ -150,7 +159,11 @@ class SemanticEnricher:
             "hwnd": payload.get("hwnd"),
         }
         current_state = payload.get("control_state")
-        if current_state is None and self.config.enrich_control_state:
+        if (
+            current_state is None
+            and self.config.enrich_control_state
+            and runtime_event_type in self.STATEFUL_RUNTIME_EVENTS
+        ):
             current_state = self.context.capture_state_from_handle(self._normalize_int(payload.get("hwnd")))
             if current_state is not None:
                 payload["control_state"] = current_state
@@ -165,7 +178,7 @@ class SemanticEnricher:
         }
 
         self._apply_shared_enrichment(
-            event_type=str(payload.get("event_type") or ""),
+            event_type=runtime_event_type,
             timestamp_utc=timestamp_utc,
             payload=payload,
             before_snapshot=before_snapshot,
@@ -175,7 +188,7 @@ class SemanticEnricher:
 
         if self.config.enrich_dialogs:
             dialog = self._build_dialog_context(
-                event_type=str(payload.get("event_type") or ""),
+                event_type=runtime_event_type,
                 timestamp_utc=timestamp_utc,
                 payload=payload,
             )

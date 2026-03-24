@@ -18,7 +18,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--hwnd", type=int, default=None)
     parser.add_argument("--mouse-move-interval", type=float, default=1)
     parser.add_argument("--session-id", default=None)
-    parser.add_argument("--enable-visual-checkpoints", action="store_true")
+    parser.add_argument("--disable-state-capture", action="store_true")
     parser.add_argument("--disable-visual-checkpoints", action="store_true")
     parser.add_argument("--visual-checkpoint-on-click", action="store_true")
     parser.add_argument("--visual-checkpoint-on-input-commit", action="store_true")
@@ -50,6 +50,7 @@ def main(argv: list[str] | None = None) -> int:
         window_filter=window_filter,
         mouse_move_interval_seconds=args.mouse_move_interval,
         session_id=args.session_id,
+        disable_state_capture=args.disable_state_capture,
         visual_checkpoint_config=VisualCheckpointConfig(
             enabled=not args.disable_visual_checkpoints,
             on_click=True if args.visual_checkpoint_on_click else None,

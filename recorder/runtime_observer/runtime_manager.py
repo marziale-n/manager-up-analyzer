@@ -23,7 +23,7 @@ class RuntimeObserverManager:
         window_filter: WindowFilter | None = None,
         target_window_regex: str | None = None,
         cpu_threshold: float = 8.0,
-        enable_state_capture: bool = False,
+        disable_state_capture: bool = False,
         visual_checkpoint_config: VisualCheckpointConfig | None = None,
         visual_event_sequence: EventSequence | None = None,
         event_listeners: list[Callable[[dict[str, Any]], None]] | None = None,
@@ -38,7 +38,7 @@ class RuntimeObserverManager:
         self.sink = JsonlEventSink(self.timeline_file)
         self.window_filter = window_filter or WindowFilter(title_regex=target_window_regex)
         self.cpu_threshold = cpu_threshold
-        self.enable_state_capture = enable_state_capture
+        self.disable_state_capture = disable_state_capture
         self.visual_checkpoint_config = visual_checkpoint_config or VisualCheckpointConfig()
         self.semantic_enrichment_config = semantic_enrichment_config or SemanticEnrichmentConfig()
         self.visual_capture = VisualCaptureManager(
@@ -58,7 +58,7 @@ class RuntimeObserverManager:
             WinEventMonitor(
                 self.emit,
                 window_filter=self.window_filter,
-                enable_state_capture=self.enable_state_capture,
+                disable_state_capture=self.disable_state_capture,
             ),
             BusyMonitor(self.emit, window_filter=self.window_filter, cpu_threshold=cpu_threshold),
         ]
@@ -74,7 +74,7 @@ class RuntimeObserverManager:
                     "started_at_utc": self.started_at_utc,
                     "window_filter": self.window_filter.to_metadata(),
                     "cpu_threshold": self.cpu_threshold,
-                    "enable_state_capture": self.enable_state_capture,
+                    "disable_state_capture": self.disable_state_capture,
                     "visual_checkpoints": self.visual_checkpoint_config.to_metadata(),
                     "semantic_enrichment": self.semantic_enrichment_config.to_metadata(),
                     "timeline_file": str(self.timeline_file),

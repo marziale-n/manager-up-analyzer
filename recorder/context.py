@@ -42,6 +42,8 @@ user32.IsWindow.restype = wintypes.BOOL
 
 user32.IsWindowVisible.argtypes = [wintypes.HWND]
 user32.IsWindowVisible.restype = wintypes.BOOL
+user32.IsWindowEnabled.argtypes = [wintypes.HWND]
+user32.IsWindowEnabled.restype = wintypes.BOOL
 
 user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
 user32.GetWindowThreadProcessId.restype = wintypes.DWORD
@@ -137,6 +139,22 @@ class ElementInfo:
 # =========================
 
 class UIContextResolver:
+    RISKY_STATE_CAPTURE_CLASSES = {
+        "combobox",
+        "edit",
+        "listbox",
+        "maskedit",
+        "richedit",
+        "richedit20w",
+        "richedit50w",
+    }
+    RISKY_STATE_CAPTURE_TYPES = {
+        "combobox",
+        "edit",
+        "list",
+        "listitem",
+    }
+
     def __init__(self) -> None:
         self.desktop_uia = Desktop(backend="uia")
         self.desktop_win32 = Desktop(backend="win32")
@@ -705,7 +723,8 @@ class UIContextResolver:
             self._safe_call(lambda: wrapper.window_text()) if wrapper is not None else None,
             self._get_control_text(hwnd),
         )
-        texts_preview = self._extract_texts_preview(wrapper)
+        allow_wrapper_state = self._allow_wrapper_state_capture(class_name, control_type)
+        texts_preview = self._extract_texts_preview(wrapper) if allow_wrapper_state else None
         style = self._get_window_long(hwnd, GWL_STYLE)
         ex_style = self._get_window_long(hwnd, GWL_EXSTYLE)
         control_id = self._get_dialog_control_id(hwnd)
@@ -725,7 +744,9 @@ class UIContextResolver:
         if hwnd is not None:
             snapshot["value_text"] = self._get_control_text(hwnd)
 
-        snapshot.update(self._capture_wrapper_specific_state(wrapper))
+        snapshot.update(self._capture_basic_window_state(hwnd))
+        if allow_wrapper_state:
+            snapshot.update(self._capture_wrapper_specific_state(wrapper))
         snapshot.update(self._capture_win32_specific_state(hwnd, class_name, style))
 
         snapshot["value_text"] = self._first_non_empty(
@@ -741,6 +762,24 @@ class UIContextResolver:
             if value not in (None, "", [], {})
         }
         return snapshot
+
+    def _capture_basic_window_state(self, hwnd: int | None) -> dict[str, Any]:
+        if hwnd is None:
+            return {}
+
+        state: dict[str, Any] = {}
+
+        try:
+            state["is_visible"] = bool(user32.IsWindowVisible(hwnd))
+        except Exception:
+            pass
+
+        try:
+            state["is_enabled"] = bool(user32.IsWindowEnabled(hwnd))
+        except Exception:
+            pass
+
+        return state
 
     def _capture_wrapper_specific_state(self, wrapper: Any) -> dict[str, Any]:
         if wrapper is None:
@@ -1162,6 +1201,24 @@ class UIContextResolver:
         if button_type in {BS_3STATE, BS_AUTO3STATE}:
             return "tri_state"
         return "button"
+
+    def _allow_wrapper_state_capture(
+        self,
+        class_name: str | None,
+        control_type: str | None,
+    ) -> bool:
+        normalized_class = (class_name or "").strip().lower()
+        normalized_type = (control_type or "").strip().lower()
+
+        if normalized_class in self.RISKY_STATE_CAPTURE_CLASSES:
+            return False
+        if normalized_type in self.RISKY_STATE_CAPTURE_TYPES:
+            return False
+        if "thunder" in normalized_class or "vb" in normalized_class:
+            return False
+        if "thunder" in normalized_type or "vb" in normalized_type:
+            return False
+        return True
 
     def _get_wrapper_from_handle(self, hwnd: int | None) -> Any | None:
         hwnd = self._safe_int(hwnd)

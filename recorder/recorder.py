@@ -30,7 +30,8 @@ class InteractionRecorder:
         session_id: str | None = None,
         external_stop_event: threading.Event | None = None,
         strict_window_filter: bool | None = None,
-        enable_state_capture: bool = True,
+        disable_logging: bool = True, 
+        disable_state_capture: bool = False,
         visual_checkpoint_config: VisualCheckpointConfig | None = None,
         visual_event_sequence: EventSequence | None = None,
         semantic_enrichment_config: SemanticEnrichmentConfig | None = None,
@@ -41,7 +42,8 @@ class InteractionRecorder:
         self.window_filter = window_filter
         self.mouse_move_interval_seconds = mouse_move_interval_seconds
         self.external_stop_event = external_stop_event
-        self.enable_state_capture = enable_state_capture
+        self.disable_logging = disable_logging
+        self.disable_state_capture = disable_state_capture
         self.visual_checkpoint_config = visual_checkpoint_config or VisualCheckpointConfig()
         self.semantic_enrichment_config = semantic_enrichment_config or SemanticEnrichmentConfig()
 
@@ -77,7 +79,7 @@ class InteractionRecorder:
         self.started_at = utc_now_iso()
         self.ended_at: str | None = None
 
-        self.debug = True
+        self.debug = not self.disable_logging
         self.debug_print_limit = 500
         self.debug_print_count = 0
 
@@ -256,7 +258,7 @@ class InteractionRecorder:
             except Exception as e:
                 self._debug(f"{kind}: get_element_from_point failed at ({x},{y}): {e}")
 
-            if self.enable_state_capture or kind in {"mouse_click", "mouse_scroll"}:
+            if not self.disable_state_capture:
                 try:
                     target_state = self.context.capture_state_for_element(
                         element=target_element,
@@ -266,7 +268,7 @@ class InteractionRecorder:
                     self._debug(f"{kind}: capture_state_for_element failed at ({x},{y}): {e}")
 
             try:
-                point_wrapper = self.context.get_wrapper_from_point(int(x), int(y))
+                point_wrapper = None if kind in {"mouse_click", "mouse_scroll"} else self.context.get_wrapper_from_point(int(x), int(y))
                 ui_target = self.ui_resolver.build_ui_target(
                     window=window,
                     element=target_element,
@@ -285,7 +287,7 @@ class InteractionRecorder:
 
         if kind == "mouse_click":
             try:
-                focused_snapshot = self.ui_resolver.resolve_focus_snapshot()
+                focused_snapshot = self._build_lightweight_focus_snapshot()
             except Exception as e:
                 self._debug(f"{kind}: focused snapshot resolution failed: {e}")
 
@@ -315,7 +317,10 @@ class InteractionRecorder:
         ui_target = None
 
         try:
-            focus_snapshot = self.ui_resolver.resolve_focus_snapshot()
+            if self.disable_state_capture:
+                focus_snapshot = self._build_lightweight_focus_snapshot()
+            else:
+                focus_snapshot = self.ui_resolver.resolve_focus_snapshot()
             window = focus_snapshot.get("window")
             target_element = focus_snapshot.get("element")
             target_state = focus_snapshot.get("state")
@@ -436,7 +441,7 @@ class InteractionRecorder:
         post_focus_snapshot = self._capture_post_focus_snapshot(raw)
         payload.update(self._build_focus_transition_payload(post_focus_snapshot))
 
-        if self.enable_state_capture:
+        if not self.disable_state_capture:
             payload.update(self._capture_post_event_artifacts(raw, post_focus_snapshot))
 
         event_timestamp = utc_now_iso()
@@ -492,14 +497,11 @@ class InteractionRecorder:
     ) -> dict[str, Any]:
         kind = raw.get("kind")
 
-        should_capture_post_state = (
-            (kind == "mouse_click" and raw.get("pressed") is False)
-            or kind == "key_up"
-        )
+        should_capture_post_state = kind == "key_up"
         if not should_capture_post_state:
             return {}
 
-        delay_seconds = 0.05 if kind == "mouse_click" else 0.02
+        delay_seconds = 0.02
         time.sleep(delay_seconds)
 
         artifacts: dict[str, Any] = {}
@@ -536,10 +538,7 @@ class InteractionRecorder:
 
     def _capture_post_focus_snapshot(self, raw: dict[str, Any]) -> dict[str, Any] | None:
         kind = raw.get("kind")
-        should_capture = (
-            (kind == "mouse_click" and raw.get("pressed") is False)
-            or kind == "key_up"
-        )
+        should_capture = kind == "key_up"
         if not should_capture:
             return None
 
@@ -547,6 +546,8 @@ class InteractionRecorder:
         time.sleep(delay_seconds)
 
         try:
+            if self.disable_state_capture:
+                return self._build_lightweight_focus_snapshot()
             return self.ui_resolver.resolve_focus_snapshot()
         except Exception as e:
             self._debug(f"{kind}: post focus snapshot failed: {e}")
@@ -681,7 +682,10 @@ class InteractionRecorder:
 
     def _flush_pending_semantic_events(self) -> None:
         try:
-            focus_snapshot = self.ui_resolver.resolve_focus_snapshot()
+            if self.disable_state_capture:
+                focus_snapshot = self._build_lightweight_focus_snapshot()
+            else:
+                focus_snapshot = self.ui_resolver.resolve_focus_snapshot()
         except Exception:
             focus_snapshot = None
 
@@ -713,6 +717,37 @@ class InteractionRecorder:
                 "after": after.get(key),
             }
         return changed or None
+
+    def _build_lightweight_focus_snapshot(self) -> dict[str, Any] | None:
+        window = None
+        element = None
+        try:
+            window = self.context.get_active_window_info()
+        except Exception:
+            window = None
+        try:
+            element = self.context.get_focused_element()
+        except Exception:
+            element = None
+
+        ui_target = self.ui_resolver.build_ui_target(
+            window=window,
+            element=element,
+            state=None,
+            wrapper=None,
+            hwnd_hint=getattr(window, "handle", None) if window is not None else None,
+        )
+        return {
+            "window": window,
+            "element": element,
+            "state": None,
+            "ui_target": ui_target,
+            "window_title": ui_target.get("window_title"),
+            "process_name": ui_target.get("process_name"),
+            "hwnd": ui_target.get("hwnd"),
+            "value": self.ui_resolver.extract_text_value(state=None, element=element),
+            "element_dict": dataclass_to_dict(element),
+        }
 
     def _serialize_key(self, key: keyboard.Key | keyboard.KeyCode | None) -> str:
         if key is None:

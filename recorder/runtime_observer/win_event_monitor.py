@@ -33,17 +33,31 @@ from .win32_utils import (
 
 
 class WinEventMonitor:
+    STATE_CAPTURE_EVENTS = {
+        "object_focus",
+        "object_statechange",
+        "object_valuechange",
+    }
+    WRAPPER_INSPECTION_EVENTS = {
+        "dialog_start",
+        "dialog_end",
+        "foreground_changed",
+        "object_focus",
+        "object_statechange",
+        "object_valuechange",
+    }
+
     def __init__(
         self,
         emit: Callable[[dict[str, Any]], None],
         window_filter: WindowFilter | None = None,
         poll_interval_seconds: float = 0.05,
-        enable_state_capture: bool = False,
+        disable_state_capture: bool = False,
     ) -> None:
         self.emit = emit
         self.window_filter = window_filter
         self.poll_interval_seconds = poll_interval_seconds
-        self.enable_state_capture = enable_state_capture
+        self.disable_state_capture = disable_state_capture
         self._lifecycle_lock = threading.Lock()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True, name="win-event-monitor")
@@ -101,7 +115,8 @@ class WinEventMonitor:
             def _callback(h_win_event_hook, event, hwnd, id_object, id_child, event_thread, event_time):
                 if not self._running:
                     return
-                
+
+                resolved_event_name = event_name(int(event))
                 raw_hwnd = int(hwnd) if hwnd else None
                 root = build_window_identity(raw_hwnd)
                 if self.window_filter is not None and not self.window_filter.matches_window(root):
@@ -119,7 +134,11 @@ class WinEventMonitor:
                     except Exception:
                         element = None
 
-                    if self.enable_state_capture:
+                    should_capture_state = (
+                        not self.disable_state_capture
+                        and resolved_event_name in self.STATE_CAPTURE_EVENTS
+                    )
+                    if should_capture_state:
                         try:
                             control_state = resolver_context.capture_state_from_handle(raw_hwnd)
                         except Exception:
@@ -131,7 +150,9 @@ class WinEventMonitor:
                         self._state_cache[raw_hwnd] = control_state
 
                     try:
-                        wrapper = resolver_context.get_wrapper_from_handle(raw_hwnd)
+                        wrapper = None
+                        if resolved_event_name in self.WRAPPER_INSPECTION_EVENTS:
+                            wrapper = resolver_context.get_wrapper_from_handle(raw_hwnd)
                         ui_target = ui_resolver.build_ui_target(
                             window=None,
                             element=element,
@@ -145,7 +166,7 @@ class WinEventMonitor:
                 self.emit(
                     {
                         "category": "system",
-                        "event_type": event_name(int(event)),
+                        "event_type": resolved_event_name,
                         "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + f".{int((time.time()%1)*1000):03d}Z",
                         "window": dataclass_to_dict(root),
                         "window_title": getattr(root, "title", None) or (ui_target or {}).get("window_title"),
