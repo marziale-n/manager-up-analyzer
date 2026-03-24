@@ -340,6 +340,78 @@ class UIContextResolver:
         state = self._extract_control_state(wrapper, hwnd)
         return element, state
 
+    def capture_dialog_details(
+        self,
+        hwnd: int | None,
+        *,
+        max_controls: int = 24,
+    ) -> dict[str, Any] | None:
+        hwnd = self._safe_int(hwnd)
+        if hwnd is None:
+            return None
+
+        window = self._build_window_info_from_hwnd(hwnd, source="dialog_handle")
+        wrapper = self._get_wrapper_from_handle(hwnd)
+        if window is None and wrapper is None:
+            return None
+
+        texts: list[str] = []
+        buttons: list[str] = []
+        controls = self._enumerate_wrapper_controls(wrapper, max_controls=max_controls)
+
+        for control in controls:
+            control_type = (control.get("control_type") or "").strip().lower()
+            text = self._normalize_text_candidate(control.get("text") or control.get("name"))
+            if not text:
+                continue
+            if control_type in {"button"}:
+                buttons.append(text)
+                continue
+            if control_type in {"text", "label", "static", "document", "edit"}:
+                texts.append(text)
+
+        title = self._first_non_empty(
+            getattr(window, "title", None),
+            self._safe_call(lambda: wrapper.window_text()) if wrapper is not None else None,
+        )
+        normalized_title = self._normalize_text_candidate(title)
+        message_parts = [text for text in texts if text != normalized_title]
+        message = "\n".join(dict.fromkeys(message_parts)) or None
+
+        return {
+            "dialog_hwnd": hwnd,
+            "dialog_title": normalized_title,
+            "dialog_message": message,
+            "available_buttons": list(dict.fromkeys(buttons)) or None,
+            "dialog_type": self._classify_dialog_type(normalized_title, message),
+            "controls_preview": controls or None,
+        }
+
+    def capture_ui_snapshot(
+        self,
+        hwnd: int | None,
+        *,
+        max_controls: int = 25,
+    ) -> dict[str, Any] | None:
+        hwnd = self._safe_int(hwnd)
+        if hwnd is None:
+            hwnd = self._get_foreground_root_hwnd()
+        if hwnd is None:
+            return None
+
+        window = self._build_window_info_from_hwnd(hwnd, source="ui_snapshot")
+        wrapper = self._get_wrapper_from_handle(hwnd)
+        if window is None and wrapper is None:
+            return None
+
+        controls = self._enumerate_wrapper_controls(wrapper, max_controls=max_controls)
+        return {
+            "window": dataclass_to_dict(window),
+            "visible_controls": controls or None,
+            "control_count": len(controls),
+            "max_controls": max_controls,
+        }
+
     def read_uia_text(self, hwnd: int | None) -> str | None:
         wrapper = self._get_wrapper_from_handle(hwnd)
         if wrapper is None:
@@ -698,6 +770,18 @@ class UIContextResolver:
         if children_count is not None:
             state["children_count"] = children_count
 
+        is_enabled = self._safe_call(lambda: wrapper.is_enabled())
+        if is_enabled is not None:
+            state["is_enabled"] = bool(is_enabled)
+
+        is_visible = self._safe_call(lambda: wrapper.is_visible())
+        if is_visible is not None:
+            state["is_visible"] = bool(is_visible)
+
+        has_focus = self._safe_call(lambda: wrapper.has_focus())
+        if has_focus is not None:
+            state["has_focus"] = bool(has_focus)
+
         return state
 
     def _capture_win32_specific_state(
@@ -773,6 +857,105 @@ class UIContextResolver:
                 }
             except Exception:
                 return None
+
+    def _enumerate_wrapper_controls(
+        self,
+        wrapper: Any | None,
+        *,
+        max_controls: int,
+    ) -> list[dict[str, Any]]:
+        if wrapper is None or max_controls <= 0:
+            return []
+
+        results: list[dict[str, Any]] = []
+        queue: list[tuple[Any, int | None]] = [(wrapper, None)]
+
+        while queue and len(results) < max_controls:
+            current, parent_handle = queue.pop(0)
+            node = self._serialize_wrapper_control(current, parent_handle=parent_handle)
+            if node is not None:
+                results.append(node)
+
+            children = self._safe_call(lambda current=current: current.children()) or []
+            current_handle = node.get("handle") if node is not None else None
+            for child in children:
+                queue.append((child, current_handle))
+
+        return results
+
+    def _serialize_wrapper_control(
+        self,
+        wrapper: Any,
+        *,
+        parent_handle: int | None,
+    ) -> dict[str, Any] | None:
+        element = self._safe_getattr(wrapper, "element_info")
+        handle = self._safe_int(
+            self._safe_getattr(wrapper, "handle")
+            or self._safe_getattr(element, "handle")
+        )
+        rect = self._extract_rectangle(wrapper)
+        control_type = self._first_non_empty(
+            self._safe_getattr(element, "control_type"),
+            self._safe_call(lambda: wrapper.friendly_class_name()),
+        )
+        name = self._normalize_text_candidate(self._safe_getattr(element, "name"))
+        text = self._normalize_text_candidate(self._safe_call(lambda: wrapper.window_text()))
+        class_name = self._normalize_text_candidate(self._safe_call(lambda: wrapper.class_name()))
+        automation_id = self._normalize_text_candidate(self._safe_getattr(element, "automation_id"))
+        visible = self._safe_call(lambda: wrapper.is_visible())
+
+        if visible is False:
+            return None
+
+        return {
+            "handle": handle,
+            "parent_handle": parent_handle,
+            "name": name,
+            "automation_id": automation_id,
+            "control_type": self._normalize_text_candidate(control_type),
+            "class_name": class_name,
+            "text": text,
+            "bounds": self._rect_to_bounds(rect),
+            "enabled": self._safe_call(lambda: bool(wrapper.is_enabled())),
+            "visible": bool(visible) if visible is not None else None,
+            "focused": self._safe_call(lambda: bool(wrapper.has_focus())),
+        }
+
+    def _classify_dialog_type(
+        self,
+        title: str | None,
+        message: str | None,
+    ) -> str | None:
+        haystack = " ".join(part for part in (title, message) if part).lower()
+        if not haystack:
+            return None
+        if any(token in haystack for token in ("errore", "error", "incongruenza", "invalid", "failed")):
+            return "error"
+        if any(token in haystack for token in ("warning", "attenzione", "attenzione!", "avviso")):
+            return "warning"
+        if any(token in haystack for token in ("confirm", "conferma", "sicuro", "question", "domanda")):
+            return "confirmation"
+        if any(token in haystack for token in ("info", "informazione", "completed", "completato")):
+            return "information"
+        return "dialog"
+
+    def _rect_to_bounds(self, rect: dict[str, Any] | None) -> dict[str, int] | None:
+        if not rect:
+            return None
+        try:
+            left = int(rect["left"])
+            top = int(rect["top"])
+            right = int(rect["right"])
+            bottom = int(rect["bottom"])
+        except Exception:
+            return None
+        return {
+            "x": left,
+            "y": top,
+            "w": max(0, right - left),
+            "h": max(0, bottom - top),
+        }
 
     # -------------------------
     # Process / text / class helpers

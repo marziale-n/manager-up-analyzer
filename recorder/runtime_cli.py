@@ -10,6 +10,7 @@ from threading import Event
 from recorder.filters import WindowFilter
 from recorder.recorder import InteractionRecorder
 from recorder.runtime_observer.runtime_manager import RuntimeObserverManager
+from recorder.semantic_enrichment import SemanticEnricher, SemanticEnrichmentConfig
 from recorder.visual_capture import EventSequence, VisualCheckpointConfig
 from recorder.window_selector import WindowInfo as SelectedWindowInfo
 from recorder.window_selector import refresh_window_reference
@@ -93,6 +94,7 @@ def run_session(
     visual_checkpoint_on_click: bool | None = None,
     visual_checkpoint_on_input_commit: bool | None = None,
     visual_checkpoint_on_runtime_change: bool | None = None,
+    semantic_enrichment_config: SemanticEnrichmentConfig | None = None,
 ) -> str:
     stop_event = stop_event or Event()
 
@@ -111,6 +113,7 @@ def run_session(
     base_output_dir.mkdir(parents=True, exist_ok=True)
 
     shared_session_id = session_id or make_session_id()
+    semantic_config = semantic_enrichment_config or SemanticEnrichmentConfig()
     visual_config = VisualCheckpointConfig(
         enabled=enable_visual_checkpoints and not disable_visual_checkpoints,
         on_click=visual_checkpoint_on_click,
@@ -118,6 +121,7 @@ def run_session(
         on_runtime_change=visual_checkpoint_on_runtime_change,
     )
     visual_sequence = EventSequence()
+    semantic_enricher = SemanticEnricher(config=semantic_config)
     window_filter = build_window_filter(
         window_title=window_title,
         window_title_regex=window_title_regex,
@@ -138,6 +142,8 @@ def run_session(
             enable_state_capture=enable_state_capture,
             visual_checkpoint_config=visual_config,
             visual_event_sequence=visual_sequence,
+            semantic_enrichment_config=semantic_config,
+            semantic_enricher=semantic_enricher,
         )
 
     runtime_manager = RuntimeObserverManager(
@@ -149,6 +155,8 @@ def run_session(
         visual_checkpoint_config=visual_config,
         visual_event_sequence=visual_sequence,
         event_listeners=[recorder.on_runtime_event] if recorder is not None else None,
+        semantic_enrichment_config=semantic_config,
+        semantic_enricher=semantic_enricher,
     )
 
     print(f"[RUNTIME] shared session id: {shared_session_id}")
@@ -209,6 +217,7 @@ def main(
     visual_checkpoint_on_click: bool | None = None,
     visual_checkpoint_on_input_commit: bool | None = None,
     visual_checkpoint_on_runtime_change: bool | None = None,
+    semantic_enrichment_config: SemanticEnrichmentConfig | None = None,
 ) -> str:
     return run_session(
         window_title=window_title,
@@ -228,6 +237,7 @@ def main(
         visual_checkpoint_on_click=visual_checkpoint_on_click,
         visual_checkpoint_on_input_commit=visual_checkpoint_on_input_commit,
         visual_checkpoint_on_runtime_change=visual_checkpoint_on_runtime_change,
+        semantic_enrichment_config=semantic_enrichment_config,
     )
 
 
@@ -249,12 +259,30 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--visual-checkpoint-on-click", action="store_true")
     parser.add_argument("--visual-checkpoint-on-input-commit", action="store_true")
     parser.add_argument("--visual-checkpoint-on-runtime-change", action="store_true")
+    parser.add_argument("--disable-enrich-control-identity", action="store_true")
+    parser.add_argument("--disable-enrich-control-state", action="store_true")
+    parser.add_argument("--disable-enrich-label-mapping", action="store_true")
+    parser.add_argument("--disable-enrich-dialogs", action="store_true")
+    parser.add_argument("--disable-enrich-grid-context", action="store_true")
+    parser.add_argument("--disable-enrich-ui-snapshots", action="store_true")
+    parser.add_argument("--disable-confidence-metadata", action="store_true")
+    parser.add_argument("--ui-snapshot-max-controls", type=int, default=25)
     return parser
 
 
 def cli(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    semantic_config = SemanticEnrichmentConfig(
+        enrich_control_identity=not args.disable_enrich_control_identity,
+        enrich_control_state=not args.disable_enrich_control_state,
+        enrich_label_mapping=not args.disable_enrich_label_mapping,
+        enrich_dialogs=not args.disable_enrich_dialogs,
+        enrich_grid_context=not args.disable_enrich_grid_context,
+        enrich_ui_snapshots=not args.disable_enrich_ui_snapshots,
+        include_confidence_metadata=not args.disable_confidence_metadata,
+        ui_snapshot_max_controls=max(1, int(args.ui_snapshot_max_controls or 25)),
+    )
 
     main(
         window_title=args.window_title,
@@ -273,6 +301,7 @@ def cli(argv: list[str] | None = None) -> int:
         visual_checkpoint_on_click=True if args.visual_checkpoint_on_click else None,
         visual_checkpoint_on_input_commit=True if args.visual_checkpoint_on_input_commit else None,
         visual_checkpoint_on_runtime_change=True if args.visual_checkpoint_on_runtime_change else None,
+        semantic_enrichment_config=semantic_config,
     )
     return 0
 

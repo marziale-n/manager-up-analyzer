@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from recorder.filters import WindowFilter
+from recorder.semantic_enrichment import SemanticEnricher, SemanticEnrichmentConfig
 from recorder.visual_capture import EventSequence, VisualCaptureManager, VisualCheckpointConfig
 
 from .busy_monitor import BusyMonitor
@@ -26,6 +27,8 @@ class RuntimeObserverManager:
         visual_checkpoint_config: VisualCheckpointConfig | None = None,
         visual_event_sequence: EventSequence | None = None,
         event_listeners: list[Callable[[dict[str, Any]], None]] | None = None,
+        semantic_enrichment_config: SemanticEnrichmentConfig | None = None,
+        semantic_enricher: SemanticEnricher | None = None,
     ) -> None:
         self.session_id = session_id or str(uuid.uuid4())
         self.session_dir = Path(output_dir) / self.session_id
@@ -37,11 +40,13 @@ class RuntimeObserverManager:
         self.cpu_threshold = cpu_threshold
         self.enable_state_capture = enable_state_capture
         self.visual_checkpoint_config = visual_checkpoint_config or VisualCheckpointConfig()
+        self.semantic_enrichment_config = semantic_enrichment_config or SemanticEnrichmentConfig()
         self.visual_capture = VisualCaptureManager(
             session_dir=self.session_dir,
             config=self.visual_checkpoint_config,
             event_sequence=visual_event_sequence,
         )
+        self.semantic_enricher = semantic_enricher or SemanticEnricher(config=self.semantic_enrichment_config)
         self.event_listeners = list(event_listeners or [])
         self.started_at_utc = self._utc_now()
         self._state_lock = threading.RLock()
@@ -71,6 +76,7 @@ class RuntimeObserverManager:
                     "cpu_threshold": self.cpu_threshold,
                     "enable_state_capture": self.enable_state_capture,
                     "visual_checkpoints": self.visual_checkpoint_config.to_metadata(),
+                    "semantic_enrichment": self.semantic_enrichment_config.to_metadata(),
                     "timeline_file": str(self.timeline_file),
                 },
                 ensure_ascii=False,
@@ -98,6 +104,10 @@ class RuntimeObserverManager:
                 )
                 if checkpoint is not None:
                     payload["visual_checkpoint"] = checkpoint
+            self.semantic_enricher.enrich_runtime_payload(
+                timestamp_utc=payload.get("timestamp_utc"),
+                payload=payload,
+            )
             self.sink.write(payload)
         for listener in self.event_listeners:
             try:

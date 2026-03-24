@@ -17,6 +17,7 @@ MVP in Python per Windows che registra le interazioni utente su una finestra tar
 - i click mouse vengono arricchiti con `ui_target`, cioè il controllo realmente colpito con nome/id/tipo/testo/bounds e contesto griglia quando disponibile
 - i controlli editabili producono eventi semantici `input_commit` con `previous_value` e `final_value` consolidato quando il focus cambia o viene premuto `Enter`
 - gli eventi significativi del runtime observer includono lo stesso layer `ui_target`, così focus, change e value change usano la stessa semantica del recorder raw
+- il payload può essere arricchito in modo additivo con `window_context`, `control_context`, `state_before`, `state_after`, `dialog`, `triggered_by`, `ui_checkpoint` e `provenance`
 - salva di default visual checkpoints con screenshot della finestra target e crop del controllo, pensati come fallback di verità visiva per applicazioni legacy VB6 / Win32
 
 ## Limitazioni attuali
@@ -47,10 +48,15 @@ Ogni evento contiene, quando disponibile:
 - processo attivo
 - controllo UI sotto il mouse o con focus
 - payload normalizzato `ui_target` con `control_name`, `control_id`, `automation_id`, `control_type`, `label`, `text`, `bounds`, `window_title`, `process_name`, `hwnd`
+- contesto opzionale `window_context` e `control_context` con identità più stabile del controllo, parent hierarchy, mapping label->control e contesto griglia/combo quando disponibile
 - stato semantico del controllo coinvolto (`target_state`)
 - eventi `input_commit` per i campi editabili con valore finale leggibile
 - stato dopo l'azione per click e tasti (`post_target_state`, `post_focused_state`)
 - differenze tra stato prima/dopo (`target_state_changes`, `focused_state_changes`)
+- snapshot opzionali `state_before` / `state_after` con `value`, `enabled`, `visible`, `focused`, `selected_index`, `selected_text`, `checked`, `read_only`
+- contesto dialog opzionale (`dialog`, `triggered_by`) su popup/modali rilevati dal runtime observer
+- snapshot strutturale leggero `ui_checkpoint` sui checkpoint chiave
+- metadati `provenance` con `source`, `confidence` e `inference_method` per distinguere dati certi da inferenze
 - stato modificatori tastiera
 - semplice aggregazione del testo digitato
 - payload additivo `visual_checkpoint` con path relativi, bounds, hash e stato della cattura
@@ -107,6 +113,12 @@ Se vuoi disabilitarlo da CLI:
 
 ```powershell
 python main.py --window-title "Notepad" --disable-visual-checkpoints
+```
+
+Puoi anche disattivare selettivamente gli arricchimenti semantici più costosi o più inferenziali:
+
+```powershell
+python main.py --window-title "Notepad" --disable-enrich-ui-snapshots --disable-enrich-dialogs
 ```
 
 Per eseguire solo il runtime observer:
@@ -195,6 +207,34 @@ Click arricchito:
       "label": "OK",
       "text": "OK",
       "bounds": [500, 290, 580, 330]
+    },
+    "window_context": {
+      "caption": "Dettaglio articolo",
+      "form_name": null,
+      "form_class": "ThunderRT6FormDC",
+      "hwnd": 460600
+    },
+    "control_context": {
+      "name": "OK",
+      "type": "Button",
+      "hwnd": 812120,
+      "control_id": "1012",
+      "label_text": "OK",
+      "bounds": {
+        "x": 500,
+        "y": 290,
+        "w": 80,
+        "h": 40
+      }
+    },
+    "state_after": {
+      "value": "OK",
+      "focused": true
+    },
+    "provenance": {
+      "source": ["event"],
+      "confidence": "high",
+      "inference_method": "event_enrichment"
     }
   }
 }
@@ -218,7 +258,46 @@ Commit del valore finale:
     },
     "previous_value": "",
     "final_value": "prova descrizione",
-    "commit_reason": "focus_lost"
+    "commit_reason": "focus_lost",
+    "control_context": {
+      "type": "Edit",
+      "hwnd": 984312,
+      "control_id": "1048",
+      "label_text": "Descrizione"
+    },
+    "state_before": {
+      "value": ""
+    },
+    "state_after": {
+      "value": "prova descrizione",
+      "read_only": false
+    }
+  }
+}
+```
+
+Dialog correlato all'azione utente:
+
+```json
+{
+  "event_type": "dialog_start",
+  "payload": {
+    "window_title": "Partitari di Magazzino",
+    "hwnd": 461024,
+    "dialog": {
+      "type": "error",
+      "title": "Partitari di Magazzino",
+      "message": "Incongruenza tra il valore del campo Data Iniziale e il valore del campo Data Finale",
+      "buttons": ["OK"],
+      "clicked_button": null,
+      "dialog_hwnd": 461024,
+      "opened_at": "2026-03-23T21:11:44.100Z"
+    },
+    "triggered_by": {
+      "event_type": "mouse_click",
+      "control_name": "cmdAvvio",
+      "control_type": "Button"
+    }
   }
 }
 ```
@@ -279,8 +358,11 @@ Evento arricchito con visual checkpoint:
 - Questo è utile soprattutto per app hostate o multi-processo come UWP / `ApplicationFrameHost`, dove il controllo UI e la finestra top-level possono avere processi diversi.
 - Per i controlli Win32 classici il recorder prova a leggere anche lo stato nativo del controllo: testo degli `Edit`, selezione e indice delle `ComboBox`/`ListBox`, stato di `CheckBox`/`RadioButton`, `control_id`, stile Win32 e testi preview.
 - Il layer `ui_target` è costruito in `recorder/ui_resolver.py` e non sostituisce i campi storici (`window`, `target_element`, `target_state`): li affianca per mantenere retrocompatibilità.
+- Il nuovo layer semantico è additivo: `window_context`, `control_context`, `state_before`, `state_after`, `dialog`, `ui_checkpoint` e `provenance` possono essere assenti o `null` quando i dati non sono disponibili.
+- `control_context.label` e `provenance` espongono `source`, `confidence` e `inference_method` per distinguere ciò che arriva direttamente da runtime/evento da ciò che è inferito.
 - La generazione degli eventi `input_commit` è separata in `recorder/semantic_events.py`, così la cattura raw e la semantica restano disaccoppiate.
 - Il runtime observer arricchisce gli eventi di sistema con `element`, `control_state`, `previous_control_state` e `control_state_changes`, così i `value_change` e `state_change` sono più leggibili.
+- I flag di arricchimento semantico disponibili da CLI sono: `--disable-enrich-control-identity`, `--disable-enrich-control-state`, `--disable-enrich-label-mapping`, `--disable-enrich-dialogs`, `--disable-enrich-grid-context`, `--disable-enrich-ui-snapshots`, `--disable-confidence-metadata`, `--ui-snapshot-max-controls`.
 - La raccolta estesa dello stato dei controlli e dei diff prima/dopo è disponibile solo in modalità esplicita `--enable-state-capture`. Di default è disattivata perché su alcune applicazioni legacy può provocare effetti collaterali indesiderati.
 - I visual checkpoints sono attivi di default. Catturano una sola immagine `after` per evento rilevante: click mouse rilasciato, `input_commit`, apertura dialog/finestra e runtime `value_change` / `state_change` significativi.
 - Da GUI puoi disabilitarli con la checkbox `Disable visual checkpoints`; da CLI puoi usare `--disable-visual-checkpoints`.

@@ -32,6 +32,7 @@ class RecorderController:
                     visual_checkpoint_on_click=config.get("visual_checkpoint_on_click"),
                     visual_checkpoint_on_input_commit=config.get("visual_checkpoint_on_input_commit"),
                     visual_checkpoint_on_runtime_change=config.get("visual_checkpoint_on_runtime_change"),
+                    semantic_enrichment_config=config.get("semantic_enrichment_config"),
                 )
             finally:
                 self._running = False

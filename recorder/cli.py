@@ -4,6 +4,7 @@ import argparse
 
 from recorder.filters import WindowFilter
 from recorder.recorder import InteractionRecorder
+from recorder.semantic_enrichment import SemanticEnrichmentConfig
 from recorder.visual_capture import VisualCheckpointConfig
 
 
@@ -21,6 +22,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--disable-visual-checkpoints", action="store_true")
     parser.add_argument("--visual-checkpoint-on-click", action="store_true")
     parser.add_argument("--visual-checkpoint-on-input-commit", action="store_true")
+    parser.add_argument("--disable-enrich-control-identity", action="store_true")
+    parser.add_argument("--disable-enrich-control-state", action="store_true")
+    parser.add_argument("--disable-enrich-label-mapping", action="store_true")
+    parser.add_argument("--disable-enrich-dialogs", action="store_true")
+    parser.add_argument("--disable-enrich-grid-context", action="store_true")
+    parser.add_argument("--disable-enrich-ui-snapshots", action="store_true")
+    parser.add_argument("--disable-confidence-metadata", action="store_true")
+    parser.add_argument("--ui-snapshot-max-controls", type=int, default=25)
     return parser
 
 
@@ -45,6 +54,16 @@ def main(argv: list[str] | None = None) -> int:
             enabled=not args.disable_visual_checkpoints,
             on_click=True if args.visual_checkpoint_on_click else None,
             on_input_commit=True if args.visual_checkpoint_on_input_commit else None,
+        ),
+        semantic_enrichment_config=SemanticEnrichmentConfig(
+            enrich_control_identity=not args.disable_enrich_control_identity,
+            enrich_control_state=not args.disable_enrich_control_state,
+            enrich_label_mapping=not args.disable_enrich_label_mapping,
+            enrich_dialogs=not args.disable_enrich_dialogs,
+            enrich_grid_context=not args.disable_enrich_grid_context,
+            enrich_ui_snapshots=not args.disable_enrich_ui_snapshots,
+            include_confidence_metadata=not args.disable_confidence_metadata,
+            ui_snapshot_max_controls=max(1, int(args.ui_snapshot_max_controls or 25)),
         ),
     )
 

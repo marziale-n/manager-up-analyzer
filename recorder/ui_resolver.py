@@ -91,13 +91,19 @@ class UIElementResolver:
         point: tuple[int, int] | None = None,
         hwnd_hint: int | None = None,
     ) -> dict[str, Any]:
-        label = self._resolve_label(element=element, state=state, wrapper=wrapper)
+        label_metadata = self._resolve_label_metadata(element=element, state=state, wrapper=wrapper)
+        label = label_metadata.get("text") if label_metadata else None
         text_value = self.extract_text_value(state=state, element=element)
         bounds = self._rect_to_bounds(getattr(element, "rectangle", None))
         control_id = self._normalize_control_id(state.get("control_id") if state else None)
         automation_id = self._clean_string(getattr(element, "automation_id", None))
         handle = self._coalesce_hwnd(getattr(element, "handle", None), hwnd_hint)
         grid_context = self._extract_grid_context(wrapper=wrapper, element=element, state=state)
+        parent_context = {
+            "name": self._clean_string(getattr(element, "parent_name", None)),
+            "control_type": self._clean_string(getattr(element, "parent_control_type", None)),
+        }
+        ancestry = self._normalize_ancestry(getattr(element, "ancestry", None))
 
         ui_target = {
             "control_name": self._clean_string(getattr(element, "name", None)),
@@ -106,6 +112,7 @@ class UIElementResolver:
             "control_type": self._clean_string(getattr(element, "control_type", None)),
             "class_name": self._clean_string(getattr(element, "class_name", None)),
             "label": label,
+            "label_metadata": label_metadata,
             "text": text_value,
             "value": text_value,
             "bounds": bounds,
@@ -113,6 +120,8 @@ class UIElementResolver:
             "window_title": self._window_title(window, element),
             "process_name": self._process_name(window, element),
             "hwnd": self._window_hwnd(window, element, hwnd_hint=hwnd_hint),
+            "parent": parent_context if any(parent_context.values()) else None,
+            "ancestry": ancestry,
             "grid_context": grid_context,
         }
 
@@ -234,16 +243,17 @@ class UIElementResolver:
             "element_dict": dataclass_to_dict(element),
         }
 
-    def _resolve_label(
+    def _resolve_label_metadata(
         self,
         *,
         element: ElementInfo | None,
         state: dict[str, Any] | None,
         wrapper: Any | None,
-    ) -> str | None:
+    ) -> dict[str, Any] | None:
         control_type = self._clean_string(getattr(element, "control_type", None))
         class_name = self._clean_string(getattr(element, "class_name", None))
         current_value = self.extract_text_value(state=state, element=element)
+        target_control_id = self._normalize_control_id((state or {}).get("control_id"))
         editable_like = self.is_editable_target(
             {
                 "control_type": control_type,
@@ -255,12 +265,37 @@ class UIElementResolver:
         if editable_like:
             sibling_label = self._resolve_label_from_siblings(wrapper)
             if sibling_label:
-                return sibling_label
+                return {
+                    "text": sibling_label.get("text"),
+                    "label_control_id": sibling_label.get("control_id"),
+                    "target_control_id": target_control_id,
+                    "source": "runtime",
+                    "confidence": "high",
+                    "inference_method": "sibling_label_left_or_above",
+                }
 
             candidate_name = self._clean_string(getattr(element, "name", None))
             if candidate_name and candidate_name != current_value:
-                return candidate_name
-            return self._clean_string(getattr(element, "parent_name", None))
+                return {
+                    "text": candidate_name,
+                    "label_control_id": None,
+                    "target_control_id": target_control_id,
+                    "source": "event",
+                    "confidence": "medium",
+                    "inference_method": "control_name_fallback",
+                }
+
+            parent_name = self._clean_string(getattr(element, "parent_name", None))
+            if parent_name:
+                return {
+                    "text": parent_name,
+                    "label_control_id": None,
+                    "target_control_id": target_control_id,
+                    "source": "inferred",
+                    "confidence": "low",
+                    "inference_method": "parent_group_fallback",
+                }
+            return None
 
         direct_label = self._first_non_empty(
             self._clean_string(getattr(element, "name", None)),
@@ -268,15 +303,39 @@ class UIElementResolver:
             self._clean_string((state or {}).get("button_text")),
         )
         if direct_label:
-            return direct_label
+            return {
+                "text": direct_label,
+                "label_control_id": None,
+                "target_control_id": target_control_id,
+                "source": "event",
+                "confidence": "high",
+                "inference_method": "direct_text",
+            }
 
         sibling_label = self._resolve_label_from_siblings(wrapper)
         if sibling_label:
-            return sibling_label
+            return {
+                "text": sibling_label.get("text"),
+                "label_control_id": sibling_label.get("control_id"),
+                "target_control_id": target_control_id,
+                "source": "runtime",
+                "confidence": "medium",
+                "inference_method": "sibling_label_left_or_above",
+            }
 
-        return self._clean_string(getattr(element, "parent_name", None))
+        parent_name = self._clean_string(getattr(element, "parent_name", None))
+        if not parent_name:
+            return None
+        return {
+            "text": parent_name,
+            "label_control_id": None,
+            "target_control_id": target_control_id,
+            "source": "inferred",
+            "confidence": "low",
+            "inference_method": "parent_name_fallback",
+        }
 
-    def _resolve_label_from_siblings(self, wrapper: Any | None) -> str | None:
+    def _resolve_label_from_siblings(self, wrapper: Any | None) -> dict[str, Any] | None:
         if wrapper is None:
             return None
 
@@ -288,7 +347,7 @@ class UIElementResolver:
         if target_rect is None:
             return None
 
-        candidates: list[tuple[int, str]] = []
+        candidates: list[tuple[int, dict[str, Any]]] = []
         siblings = self._safe_call(lambda: parent.children()) or []
         for sibling in siblings:
             if sibling is wrapper:
@@ -316,7 +375,19 @@ class UIElementResolver:
                 distance = abs(target_rect["top"] - sibling_rect["bottom"]) + 20
             else:
                 continue
-            candidates.append((distance, sibling_text))
+            candidates.append(
+                (
+                    distance,
+                    {
+                        "text": sibling_text,
+                        "control_id": self._normalize_control_id(
+                            self._safe_getattr(self._safe_getattr(sibling, "element_info"), "automation_id")
+                            or self._safe_call(lambda sibling=sibling: sibling.control_id())
+                            or self._safe_getattr(self._safe_getattr(sibling, "element_info"), "handle")
+                        ),
+                    },
+                )
+            )
 
         if not candidates:
             return None
@@ -362,12 +433,26 @@ class UIElementResolver:
             return None
 
         resolved_column = column_label or self._normalize_column(column)
+        resolved_row = self._normalize_row(row)
+        row_key = self._first_non_empty(
+            self._clean_string((state or {}).get("selected_text")),
+            cell_value,
+            self._clean_string(getattr(element, "name", None)),
+        )
         return {
             "grid_name": name,
             "grid_type": control_type,
-            "row": self._normalize_row(row),
+            "row": resolved_row,
             "column": resolved_column,
             "cell_value": cell_value,
+            "grid_control_name": name,
+            "grid_control_type": control_type,
+            "active_row": resolved_row,
+            "active_col": resolved_column,
+            "selected_row": resolved_row,
+            "selected_col": resolved_column,
+            "column_header": resolved_column,
+            "row_key": row_key,
         }
 
     def _normalize_row(self, row: Any) -> int | None:
@@ -517,3 +602,20 @@ class UIElementResolver:
             return getattr(obj, attr, None)
         except Exception:
             return None
+
+    def _normalize_ancestry(self, ancestry: Any) -> list[dict[str, Any]] | None:
+        if not isinstance(ancestry, list):
+            return None
+        normalized: list[dict[str, Any]] = []
+        for item in ancestry:
+            if not isinstance(item, dict):
+                continue
+            entry = {
+                "name": self._clean_string(item.get("name")),
+                "control_type": self._clean_string(item.get("control_type")),
+                "class_name": self._clean_string(item.get("class_name")),
+                "handle": self._coalesce_hwnd(item.get("handle")),
+            }
+            if any(value is not None for value in entry.values()):
+                normalized.append(entry)
+        return normalized or None

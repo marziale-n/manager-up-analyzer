@@ -37,6 +37,10 @@ Runtime events now include, when available:
 - `control_state`: current control snapshot
 - `previous_control_state`: previous snapshot cached for the same control
 - `control_state_changes`: top-level diff between previous and current snapshot
+- `window_context`, `control_context`, `state_before`, `state_after`: additive semantic context aligned with recorder output
+- `dialog` and `triggered_by`: correlation for dialog/modal lifecycle when the runtime channel can resolve it
+- `ui_checkpoint`: lightweight visible control tree on key checkpoints
+- `provenance`: `source`, `confidence`, `inference_method` for derived fields
 - `visual_checkpoint`: screenshot finestra e crop controllo sui runtime event significativi; il layer è attivo di default
 
 These extra control snapshots are disabled by default and are enabled only with `--enable-state-capture`, because some legacy desktop applications may react badly to deep control inspection.
@@ -65,6 +69,12 @@ Run with runtime visual checkpoints disabled:
 
 ```powershell
 python main.py --window-title "Calcolatrice" --disable-visual-checkpoints
+```
+
+Run with lightweight runtime semantic enrichment but without UI structural snapshots:
+
+```powershell
+python main.py --window-title "Calcolatrice" --disable-enrich-ui-snapshots
 ```
 
 ## How targeting works now

@@ -12,6 +12,7 @@ from pynput import keyboard, mouse
 from recorder.context import UIContextResolver, dataclass_to_dict
 from recorder.filters import WindowFilter
 from recorder.models import Event
+from recorder.semantic_enrichment import SemanticEnricher, SemanticEnrichmentConfig
 from recorder.semantic_events import SemanticEventBuilder
 from recorder.state_manager import StateManager
 from recorder.storage import SessionWriter
@@ -29,9 +30,11 @@ class InteractionRecorder:
         session_id: str | None = None,
         external_stop_event: threading.Event | None = None,
         strict_window_filter: bool | None = None,
-        enable_state_capture: bool = False,
+        enable_state_capture: bool = True,
         visual_checkpoint_config: VisualCheckpointConfig | None = None,
         visual_event_sequence: EventSequence | None = None,
+        semantic_enrichment_config: SemanticEnrichmentConfig | None = None,
+        semantic_enricher: SemanticEnricher | None = None,
     ) -> None:
         self.session_id = session_id or new_id()
         self.session_dir = Path(output_dir) / self.session_id
@@ -40,6 +43,7 @@ class InteractionRecorder:
         self.external_stop_event = external_stop_event
         self.enable_state_capture = enable_state_capture
         self.visual_checkpoint_config = visual_checkpoint_config or VisualCheckpointConfig()
+        self.semantic_enrichment_config = semantic_enrichment_config or SemanticEnrichmentConfig()
 
         self.writer = SessionWriter(self.session_dir)
         self.context = UIContextResolver()
@@ -54,6 +58,11 @@ class InteractionRecorder:
             session_dir=self.session_dir,
             config=self.visual_checkpoint_config,
             event_sequence=visual_event_sequence,
+        )
+        self.semantic_enricher = semantic_enricher or SemanticEnricher(
+            context=self.context,
+            ui_resolver=self.ui_resolver,
+            config=self.semantic_enrichment_config,
         )
         self.event_queue: queue.Queue[dict[str, Any]] = queue.Queue()
         self.stop_event = threading.Event()
@@ -111,6 +120,7 @@ class InteractionRecorder:
                 "window_filter": self.window_filter.to_metadata(),
                 "strict_window_filter": self.strict_window_filter,
                 "visual_checkpoints": self.visual_checkpoint_config.to_metadata(),
+                "semantic_enrichment": self.semantic_enrichment_config.to_metadata(),
                 "notes": "MVP with optional visual fallback checkpoints",
             }
         )
@@ -422,16 +432,26 @@ class InteractionRecorder:
             if typed_text is not None:
                 payload["text_buffer"] = typed_text
 
+        pre_focus_snapshot = self._build_pre_focus_snapshot(raw, payload)
         post_focus_snapshot = self._capture_post_focus_snapshot(raw)
         payload.update(self._build_focus_transition_payload(post_focus_snapshot))
 
         if self.enable_state_capture:
             payload.update(self._capture_post_event_artifacts(raw, post_focus_snapshot))
 
+        event_timestamp = utc_now_iso()
+        self.semantic_enricher.enrich_recorder_payload(
+            event_type=kind,
+            timestamp_utc=event_timestamp,
+            payload=payload,
+            pre_snapshot=pre_focus_snapshot,
+            post_snapshot=post_focus_snapshot,
+        )
+
         raw_event = Event(
             event_id=new_id(),
             session_id=self.session_id,
-            timestamp_utc=utc_now_iso(),
+            timestamp_utc=event_timestamp,
             event_type=kind,
             payload=payload,
         )
@@ -440,8 +460,12 @@ class InteractionRecorder:
         self.writer.append_event(raw_event)
         self.stats[kind] += 1
         self.recorded_total += 1
-
-        pre_focus_snapshot = self._build_pre_focus_snapshot(raw, payload)
+        if kind != "mouse_click" or payload.get("pressed") is False:
+            self.semantic_enricher.note_user_event(
+                event_type=kind,
+                payload=raw_event.payload,
+                timestamp_utc=raw_event.timestamp_utc,
+            )
         semantic_payloads = self.semantic_builder.process_event(
             event_type=kind,
             timestamp_utc=raw_event.timestamp_utc,
@@ -596,6 +620,13 @@ class InteractionRecorder:
         timestamp_utc: str,
     ) -> None:
         for payload in semantic_payloads:
+            control_state = self.state_manager.get_control_state(str(payload.get("control_key") or ""))
+            latest_snapshot = control_state.latest_snapshot if control_state is not None else None
+            self.semantic_enricher.enrich_input_commit_payload(
+                timestamp_utc=timestamp_utc,
+                payload=payload,
+                latest_snapshot=latest_snapshot,
+            )
             event = Event(
                 event_id=new_id(),
                 session_id=self.session_id,
@@ -605,6 +636,11 @@ class InteractionRecorder:
             )
             self._attach_visual_checkpoint(event)
             self.writer.append_event(event)
+            self.semantic_enricher.note_user_event(
+                event_type=event.event_type,
+                payload=event.payload,
+                timestamp_utc=event.timestamp_utc,
+            )
             self.stats["input_commit"] += 1
             self.recorded_total += 1
 
