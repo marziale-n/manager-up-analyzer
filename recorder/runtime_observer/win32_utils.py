@@ -151,19 +151,28 @@ def is_window(hwnd: int | None) -> bool:
 def normalize_root_hwnd(hwnd: int | None) -> int | None:
     if not hwnd or not is_window(hwnd):
         return None
+        
+    # 1. Troviamo il GA_ROOT
+    root = None
+    try:
+        root = int(user32.GetAncestor(hwnd, GA_ROOT) or 0)
+    except Exception:
+        pass
+
+    # 2. Troviamo il GA_ROOTOWNER e verifichiamo che sia visibile
     try:
         root_owner = int(user32.GetAncestor(hwnd, GA_ROOTOWNER) or 0)
         if root_owner:
-            hwnd = root_owner
+            if bool(user32.IsWindowVisible(root_owner)):
+                return root_owner
     except Exception:
         pass
-    try:
-        root = int(user32.GetAncestor(hwnd, GA_ROOT) or 0)
-        if root:
-            hwnd = root
-    except Exception:
-        pass
-    return hwnd if is_window(hwnd) else None
+
+    # 3. Fallback sul GA_ROOT se l'owner è nascosto (comportamento VB6)
+    if root:
+        return root if is_window(root) else None
+
+    return hwnd
 
 
 def get_foreground_hwnd() -> int | None:

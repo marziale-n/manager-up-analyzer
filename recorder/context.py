@@ -491,23 +491,29 @@ class UIContextResolver:
         except Exception:
             return None
 
-        # Prefer owned root window
+        # 1. Troviamo il GA_ROOT (il top-level fisico nell'albero parent/child)
+        root = None
+        try:
+            root = int(user32.GetAncestor(hwnd, GA_ROOT) or 0)
+        except Exception:
+            pass
+
+        # 2. Troviamo il GA_ROOTOWNER (il possessore logico)
         try:
             root_owner = int(user32.GetAncestor(hwnd, GA_ROOTOWNER) or 0)
             if root_owner:
-                hwnd = root_owner
+                # FIX VB6: Accettiamo il Root Owner SOLO se è una finestra visibile.
+                # Altrimenti, applicazioni legacy ci daranno proxy window nascoste con rect 0x0.
+                if bool(user32.IsWindowVisible(root_owner)):
+                    return root_owner
         except Exception:
             pass
 
-        # Secondary fallback to root parent chain
-        try:
-            root = int(user32.GetAncestor(hwnd, GA_ROOT) or 0)
-            if root:
-                hwnd = root
-        except Exception:
-            pass
+        # 3. Fallback sul GA_ROOT se l'owner è nascosto o non esiste
+        if root:
+            return root
 
-        return hwnd or None
+        return hwnd
 
     def _build_window_info_from_hwnd(self, hwnd: int | None, source: str) -> WindowInfo | None:
         if not hwnd:
