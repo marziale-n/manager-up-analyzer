@@ -1,4 +1,5 @@
 import logging
+import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import ttk, filedialog, messagebox
@@ -261,26 +262,57 @@ class RecorderApp:
         self.notebook.select(self.tab_logs)
 
     def _stop(self):
+        """Inizia la procedura di arresto e salvataggio in modo asincrono per non freezare la UI."""
+        # 1. Mette l'interfaccia in stato di LOADING (Blocco input utente)
+        self.btn_stop.config(state="disabled", text="⏳ SALVATAGGIO...")
+        self.btn_start.config(state="disabled")
+        
+        # Cambia il cursore in clessidra/rotella di caricamento
+        self.root.config(cursor="watch") 
+        
+        # Aggiorna lo status testuale (Colore Arancione/Warning)
+        self.lbl_status.config(text="⬤ Salvataggio in corso...", fg="#F59E0B")
+        self.log_gui_message("=== ATTENDERE: CHIUSURA E SALVATAGGIO DEI FILE IN CORSO... ===")
+        
+        # Forza l'aggiornamento visivo immediato di Tkinter prima di lanciare il thread
+        self.root.update_idletasks()
+
+        # 2. Lancia la funzione di chiusura pesante in un thread separato
+        threading.Thread(target=self._execute_stop_background, daemon=True).start()
+
+    def _execute_stop_background(self):
+        """Esegue fisicamente la chiusura dei file e lo svuotamento dei buffer nel SO."""
         try:
-            # Ferma il controller ufficiale e recupera la cartella
+            # Questa è la chiamata lenta che scrive i file su disco
             session_dir = self.controller.stop()
+            
+            # 3. Usa 'after' per rimettere in coda l'aggiornamento UI sul thread principale
+            self.root.after(0, lambda: self._on_stop_complete(session_dir, None))
         except Exception as e:
-            messagebox.showerror("Errore di Arresto", str(e))
+            self.root.after(0, lambda: self._on_stop_complete(None, str(e)))
+
+    def _on_stop_complete(self, session_dir: str, error_msg: str):
+        """Callback eseguita al termine del salvataggio, ripristina la UI."""
+        # 4. Ripristina l'interfaccia allo stato normale
+        self.root.config(cursor="") # Toglie la clessidra
+        self.btn_stop.config(text="⏹ FERMA E SALVA")
+        self.btn_start.config(state="normal")
+        self.lbl_status.config(text="⬤ Pronta", fg=self.TEXT_MUTED)
+
+        if error_msg:
+            messagebox.showerror("Errore di Arresto", error_msg)
             return
 
-        self.lbl_status.config(text="⬤ Pronta", fg=self.TEXT_MUTED)
-        self.btn_start.config(state="normal")
-        self.btn_stop.config(state="disabled")
-
-        self.log_gui_message("=== REGISTRAZIONE FERMATA ===")
+        self.log_gui_message("=== REGISTRAZIONE COMPLETATA ===")
         if session_dir:
             self.log_gui_message(f"Dati salvati in: {session_dir}")
 
-        msg = "Registrazione completata con successo!"
+        # Mostra il popup finale
+        msg = "Registrazione completata e file salvati con successo!"
         if session_dir:
             msg += f"\n\nSessione salvata in:\n{session_dir}"
 
-        messagebox.showinfo("Fatto", msg)
+        messagebox.showinfo("Salvataggio Completato", msg)
 
 if __name__ == "__main__":
     root = tk.Tk()
