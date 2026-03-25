@@ -13,7 +13,7 @@ from recorder.visual_capture import EventSequence, VisualCaptureManager, VisualC
 from .busy_monitor import BusyMonitor
 from .sink import JsonlEventSink
 from .win_event_monitor import WinEventMonitor
-
+from .clipboard_monitor import ClipboardMonitor
 
 class RuntimeObserverManager:
     def __init__(
@@ -61,6 +61,7 @@ class RuntimeObserverManager:
                 disable_state_capture=self.disable_state_capture,
             ),
             BusyMonitor(self.emit, window_filter=self.window_filter, cpu_threshold=cpu_threshold),
+            ClipboardMonitor(self.emit),
         ]
 
     def _utc_now(self) -> str:

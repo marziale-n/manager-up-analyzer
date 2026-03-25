@@ -300,3 +300,20 @@ def wait_for_input_idle(pid: int | None, timeout_ms: int = 50) -> str | None:
     finally:
         if handle:
             kernel32.CloseHandle(handle)
+
+WM_GETTEXT = 0x000D
+WM_GETTEXTLENGTH = 0x000E
+
+def get_control_text_passively(hwnd: int | None) -> str | None:
+    if not hwnd or not is_window(hwnd):
+        return None
+    try:
+        # Usa SendMessageW invece di GetWindowTextW (che a volte fallisce sui controlli figli tra processi diversi)
+        length = int(user32.SendMessageW(hwnd, WM_GETTEXTLENGTH, 0, 0))
+        if length <= 0:
+            return None
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        user32.SendMessageW(hwnd, WM_GETTEXT, length + 1, buffer)
+        return buffer.value
+    except Exception:
+        return None

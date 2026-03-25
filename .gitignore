@@ -2,3 +2,6 @@ output
 __pycache__
 build
 dist
+tesseract_bin
+.vscode
+.pytest_cache

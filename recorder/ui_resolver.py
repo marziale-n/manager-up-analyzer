@@ -4,6 +4,7 @@ import re
 from typing import Any
 
 from recorder.context import ElementInfo, UIContextResolver, WindowInfo, dataclass_to_dict
+from .msaa_resolver import get_msaa_info
 
 
 class UIElementResolver:
@@ -83,12 +84,10 @@ class UIElementResolver:
 
     def build_ui_target(
         self,
-        *,
-        window: WindowInfo | None,
-        element: ElementInfo | None,
-        state: dict[str, Any] | None,
+        window: Any | None = None,
+        element: Any | None = None,
+        state: dict[str, Any] | None = None,
         wrapper: Any | None = None,
-        point: tuple[int, int] | None = None,
         hwnd_hint: int | None = None,
     ) -> dict[str, Any]:
         label_metadata = self._resolve_label_metadata(element=element, state=state, wrapper=wrapper)
@@ -124,8 +123,30 @@ class UIElementResolver:
             "ancestry": ancestry,
             "grid_context": grid_context,
         }
+        
+        target_hwnd = hwnd_hint or ui_target.get("hwnd")
+        class_name = ui_target.get("class_name", "")
+        
+        # Applichiamo MSAA se abbiamo un handle e se il testo estratto normalmente è vuoto
+        # oppure se sappiamo con certezza che è un controllo VB6 (inizia con Thunder)
+        if target_hwnd:
+            current_text = ui_target.get("text")
+            is_vb6_control = isinstance(class_name, str) and "Thunder" in class_name
+            
+            if is_vb6_control or not current_text:
+                msaa_data = get_msaa_info(target_hwnd)
+                if msaa_data:
+                    # Arricchiamo il target con i dati nativi di accessibilità
+                    ui_target["msaa_name"] = msaa_data.get("msaa_name")
+                    ui_target["msaa_value"] = msaa_data.get("msaa_value")
+                    
+                    # Se il testo standard era vuoto, usiamo il valore MSAA come fallback principale
+                    if not current_text:
+                        # Preferiamo il Value, se assente usiamo il Name
+                        ui_target["text"] = msaa_data.get("msaa_value") or msaa_data.get("msaa_name")
+                        ui_target["extraction_method"] = "native_msaa"
 
-        return {key: ui_target.get(key) for key in ui_target}
+        return ui_target
 
     def extract_text_value(
         self,

@@ -7,6 +7,7 @@ from typing import Any, Callable
 from recorder.context import UIContextResolver, dataclass_to_dict as context_dataclass_to_dict
 from recorder.filters import WindowFilter
 from recorder.ui_resolver import UIElementResolver
+from .win32_utils import get_class_name, get_control_text_passively
 
 from .win32_utils import (
     EVENT_OBJECT_FOCUS,
@@ -140,7 +141,14 @@ class WinEventMonitor:
                     )
                     if should_capture_state:
                         try:
-                            control_state = resolver_context.capture_state_from_handle(raw_hwnd)
+                            class_name = get_class_name(raw_hwnd)
+                            # Selettore passivo per i controlli VB6 "problematici"
+                            if class_name and "ThunderRT6" in class_name:
+                                passive_text = get_control_text_passively(raw_hwnd)
+                                control_state = {"value": passive_text, "extraction_method": "passive_win32"}
+                            else:
+                                # Fallback al tuo resolver standard per le app non-VB6
+                                control_state = resolver_context.capture_state_from_handle(raw_hwnd)
                         except Exception:
                             control_state = None
 

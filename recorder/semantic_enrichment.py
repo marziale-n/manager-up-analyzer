@@ -7,6 +7,40 @@ from typing import Any
 from recorder.context import UIContextResolver
 from recorder.ui_resolver import UIElementResolver
 
+import os
+import logging
+from typing import Any
+import sys
+
+try:
+    from PIL import Image
+    import pytesseract
+    
+    # --- LOGICA PER PYINSTALLER ---
+    def get_resource_path(relative_path: str) -> str:
+        """Ottiene il percorso assoluto alla risorsa, funziona sia in dev che con PyInstaller"""
+        if hasattr(sys, '_MEIPASS'):
+            # Se siamo nell'eseguibile PyInstaller, i file sono qui
+            return os.path.join(sys._MEIPASS, relative_path)
+        # Se siamo in esecuzione normale (sviluppo)
+        return os.path.join(os.path.abspath("."), relative_path)
+
+    # 1. Puntiamo all'eseguibile bundle
+    tesseract_exe = get_resource_path(os.path.join("tesseract_bin", "tesseract.exe"))
+    pytesseract.pytesseract.tesseract_cmd = tesseract_exe
+
+    # 2. FONDAMENTALE: Diciamo a Tesseract dove trovare i file delle lingue (tessdata)
+    tessdata_dir = get_resource_path("tesseract_bin")
+    os.environ["TESSDATA_PREFIX"] = tessdata_dir
+
+    HAS_OCR = os.path.exists(tesseract_exe)
+    if not HAS_OCR:
+        logging.warning(f"Eseguibile Tesseract non trovato in {tesseract_exe}")
+
+except ImportError:
+    HAS_OCR = False
+    logging.warning("Librerie Pillow o pytesseract non trovate.")
+
 
 @dataclass(slots=True)
 class SemanticEnrichmentConfig:
@@ -204,6 +238,33 @@ class SemanticEnricher:
                         payload=payload,
                         method="runtime_observer_enrichment",
                     )
+                    
+        # --- NUOVA LOGICA: Fallback OCR On-Demand ---
+        ui_target = payload.get("ui_target") or {}
+        control_state = payload.get("control_state") or {}
+        visual_checkpoint = payload.get("visual_checkpoint") or {}
+        
+        crop_path = visual_checkpoint.get("crop_path")
+        class_name = ui_target.get("class_name", "")
+        
+        # Verifichiamo se il controllo non ha un valore testuale estratto dai metodi standard
+        current_value = control_state.get("value") or ui_target.get("text")
+        
+        # Se abbiamo il crop, NON abbiamo il testo, e sembra un controllo VB6 (o una griglia)
+        if crop_path and not current_value:
+            # Filtro opzionale: eseguiamo l'OCR solo su classi note per essere problematiche in VB6
+            if "Thunder" in class_name or "Grid" in class_name or not class_name:
+                ocr_text = self._extract_text_via_ocr(crop_path)
+                
+                if ocr_text:
+                    # Iniettiamo il testo estratto direttamente nel payload
+                    payload["ocr_extracted_text"] = ocr_text
+                    
+                    # Arricchiamo anche lo stato per i successivi moduli di analisi
+                    if payload.get("control_state") is None:
+                        payload["control_state"] = {}
+                    payload["control_state"]["ocr_value"] = ocr_text
+                    payload["control_state"]["extraction_method"] = "visual_ocr"
 
         return payload
 
@@ -711,3 +772,17 @@ class SemanticEnricher:
             if normalized in {"false", "0", "no", "off", "unchecked"}:
                 return False
         return bool(value)
+    
+    def _extract_text_via_ocr(self, crop_path: str) -> str | None:
+        """Esegue l'OCR su un ritaglio di immagine in modo difensivo."""
+        if not HAS_OCR or not crop_path or not os.path.exists(crop_path):
+            return None
+            
+        try:
+            image = Image.open(crop_path)
+            # --psm 6 assume un singolo blocco di testo uniforme, ideale per celle di griglie o bottoni
+            text = pytesseract.image_to_string(image, config='--psm 6').strip()
+            return text if text else None
+        except Exception as e:
+            logging.debug(f"Errore durante l'OCR su {crop_path}: {e}")
+            return None

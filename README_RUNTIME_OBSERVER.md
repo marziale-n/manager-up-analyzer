@@ -1,93 +1,34 @@
-# Runtime Observer Pack
+# Runtime Observer Manager
 
-This pack adds a multi-channel runtime observer for Windows desktop testing.
+Il `RuntimeObserverManager` è il componente orchestratore che unisce l'ispezione degli eventi di sistema (WinEvents), il monitoraggio dello stato del processo, l'acquisizione della clipboard e la cattura visiva, generando una timeline dettagliata dell'esecuzione di un'applicazione.
 
-## Current behavior
+## Architettura a Livello di Esecuzione
 
-The observer is now aligned with the same target selected by the recorder/GUI.
-The selected application is identified with a shared window filter that can include:
+L'Observer avvia molteplici thread daemon, ciascuno dedicato a una specifica forma di monitoraggio, convogliando i risultati in un unico sink (file JSONL).
 
-- `hwnd`
-- `pid`
-- `process_name`
-- window title or title regex
+### Componenti Principali
 
-This means the runtime observer no longer records unrelated system events just because another app became the foreground window.
-When `hwnd` or `pid` are available, they take precedence over the title so the observer keeps following the selected app even if the window title changes.
+1.  **Orchestratore (`RuntimeObserverManager`)**
+    * Gestisce il ciclo di vita (start/stop) dei monitor.
+    * Filtra gli eventi in base alle espressioni regolari del titolo della finestra (`WindowFilter`).
+    * Esegue la pipeline di arricchimento (Visivo -> OCR -> Semantico) in modo sequenziale per garantire coerenza temporale.
+    
+2.  **Monitor Attivi**
+    * **WinEventMonitor:** Ascolta eventi passivi come `EVENT_OBJECT_FOCUS` o `EVENT_SYSTEM_DIALOGSTART` tramite hook globali (`SetWinEventHook`). Implementa logiche non-bloccanti per evitare di interferire con l'UI thread delle app target.
+    * **BusyMonitor:** Campiona l'utilizzo della CPU del processo target.
+    * **ClipboardMonitor:** Interroga passivamente la sequenza degli appunti per loggare trasferimenti dati contestuali.
 
-## Included channels
-- `system`: foreground changes, dialogs, menus, focus, show/hide, value/name/state changes
-- `process`: CPU-based busy detection with `processing_started` and `processing_finished`
-- `timeline`: unified JSONL output in `runtime_timeline.jsonl`
+### Gestione delle Applicazioni Legacy (VB6)
 
-## Files
-- `recorder/runtime_observer/win_event_monitor.py`
-- `recorder/runtime_observer/busy_monitor.py`
-- `recorder/runtime_observer/runtime_manager.py`
-- `recorder/runtime_cli.py`
-- updated `main.py`
+Il `RuntimeObserverManager` è ottimizzato per analizzare applicazioni "scatola nera" (es. gestionali in Visual Basic 6) implementando meccanismi difensivi:
+* **Ispezione MSAA in Thread Separati:** L'estrazione dello stato tramite Active Accessibility viene racchiusa in contesti `CoInitialize` / `CoUninitialize` per evitare il blocco (freeze) dell'applicazione monitorata.
+* **Estrazione OCR On-Demand:** Se un focus o un click avviene su elementi opachi (es. griglie di dati), l'Observer innesca il `SemanticEnricher` che esegue `pytesseract` sul ritaglio (`crop_path`) generato dal `VisualCaptureManager`, estraendo il dato puramente a livello visivo.
 
-## Output
-A session folder is created in `output/<session_id>/` with:
-- `runtime_timeline.jsonl`
-- `runtime_metadata.json`
+### Ciclo di Vita di un Evento
 
-Runtime events now include, when available:
-- `element`: resolved control metadata for the raw `hwnd`
-- `control_state`: current control snapshot
-- `previous_control_state`: previous snapshot cached for the same control
-- `control_state_changes`: top-level diff between previous and current snapshot
-- `window_context`, `control_context`, `state_before`, `state_after`: additive semantic context aligned with recorder output
-- `dialog` and `triggered_by`: correlation for dialog/modal lifecycle when the runtime channel can resolve it
-- `ui_checkpoint`: lightweight visible control tree on key checkpoints
-- `provenance`: `source`, `confidence`, `inference_method` for derived fields
-- `visual_checkpoint`: screenshot finestra e crop controllo sui runtime event significativi; il layer è attivo di default
-
-These extra control snapshots are disabled by default and are enabled only with `--enable-state-capture`, because some legacy desktop applications may react badly to deep control inspection.
-The visual fallback layer is enabled by default and can be disabled with `--disable-visual-checkpoints` or from the GUI.
-
-## Usage
-Run full stack (observer + existing recorder):
-
-```powershell
-python main.py --window-title-regex ".*Calcolatrice.*"
-```
-
-Run only the runtime observer:
-
-```powershell
-python main.py --runtime-observer-only --window-title-regex ".*Calcolatrice.*"
-```
-
-Run with an exact target selected by GUI or passed manually:
-
-```powershell
-python main.py --window-title "Calcolatrice" --process-name ApplicationFrameHost.exe --pid 3672 --hwnd 263154
-```
-
-Run with runtime visual checkpoints disabled:
-
-```powershell
-python main.py --window-title "Calcolatrice" --disable-visual-checkpoints
-```
-
-Run with lightweight runtime semantic enrichment but without UI structural snapshots:
-
-```powershell
-python main.py --window-title "Calcolatrice" --disable-enrich-ui-snapshots
-```
-
-## How targeting works now
-
-- `gui_app.py` and `RecorderApp.exe` enumerate top-level windows and expose the selected `hwnd`, `pid`, `process_name` and title
-- before the session starts, that reference is refreshed to reduce stale window handles
-- if the selected window changes title or opens related dialogs, the shared filter still follows it primarily through `hwnd` / `pid`
-- `WinEventMonitor` emits only events whose resolved root window matches the selected target
-- `BusyMonitor` prefers the selected `hwnd`/`pid` instead of monitoring only the current foreground app
-- recorder and runtime observer write into the same session directory and share the same session id
-- when visual checkpoints are enabled, both components also share the same artifact folders and a session-wide event sequence used in image filenames
-
-## Important note
-The observer is additive. It is designed to run alongside the interaction recorder and does not replace it.
-When `--runtime-observer-only` is used, only `runtime_timeline.jsonl` and `runtime_metadata.json` are produced for that session.
-If a screenshot cannot be captured, the runtime event still gets written and the visual payload reports `capture_success=false`.
+1.  Un utente clicca su un'area dell'app target (es. una griglia) o esegue un `Ctrl+V`.
+2.  Il monitor pertinente (Input, WinEvent o Clipboard) cattura l'evento.
+3.  L'evento viene inviato tramite la funzione `emit()`.
+4.  L'Observer valuta se l'evento richiede uno snapshot visivo (`VisualCaptureManager.should_capture_runtime`).
+5.  Se sì, scatta uno screenshot e ritaglia il controllo (`crop_path`).
+6.  Il payload viene passato al `SemanticEnricher`. Se l'UI target non contiene testo (limite tecnico di VB6/UIA), l'enricher lancia l'OCR sul crop visivo.
