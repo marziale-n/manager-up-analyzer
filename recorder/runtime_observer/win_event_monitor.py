@@ -7,6 +7,7 @@ from typing import Any, Callable
 from recorder.context import UIContextResolver, dataclass_to_dict as context_dataclass_to_dict
 from recorder.filters import WindowFilter
 from recorder.ui_resolver import UIElementResolver
+from recorder.msaa_resolver import get_msaa_grid_data  # Nuovo import
 from .win32_utils import get_class_name, get_control_text_passively
 
 from .win32_utils import (
@@ -65,6 +66,7 @@ class WinEventMonitor:
         self._hooks: list[Any] = []
         self._callbacks: list[Any] = []
         self._state_cache: dict[int, dict[str, Any]] = {}
+        self._grid_state_cache: dict[int, list[dict[str, Any]]] = {}
         self._running = False
         self._started = False
         self._stopped = False
@@ -128,6 +130,8 @@ class WinEventMonitor:
                 control_state = None
                 previous_control_state = None
                 control_state_changes = None
+                grid_snapshot = None
+                grid_changes = None
 
                 if raw_hwnd:
                     try:
@@ -139,11 +143,13 @@ class WinEventMonitor:
                         not self.disable_state_capture
                         and resolved_event_name in self.STATE_CAPTURE_EVENTS
                     )
+                    
+                    class_name = get_class_name(raw_hwnd) or ""
+                    
                     if should_capture_state:
                         try:
-                            class_name = get_class_name(raw_hwnd)
                             # Selettore passivo per i controlli VB6 "problematici"
-                            if class_name and "ThunderRT6" in class_name:
+                            if "ThunderRT6" in class_name:
                                 passive_text = get_control_text_passively(raw_hwnd)
                                 control_state = {"value": passive_text, "extraction_method": "passive_win32"}
                             else:
@@ -168,6 +174,32 @@ class WinEventMonitor:
                             wrapper=wrapper,
                             hwnd_hint=raw_hwnd,
                         )
+                        
+                        # LOGICA AGGIUNTIVA PER GRIGLIE/TABELLE
+                        grid_hwnd = None
+                        is_grid = (
+                            "grid" in class_name.lower() or 
+                            "table" in class_name.lower() or 
+                            (ui_target and (ui_target.get("control_type") or "").lower() in ("table", "datagrid"))
+                        )
+                        
+                        if is_grid:
+                            grid_hwnd = raw_hwnd
+                        elif ui_target and ui_target.get("parent"):
+                            parent_handle = ui_target.get("parent", {}).get("handle")
+                            if parent_handle:
+                                p_class = get_class_name(parent_handle) or ""
+                                if "grid" in p_class.lower() or "table" in p_class.lower():
+                                    grid_hwnd = parent_handle
+
+                        if grid_hwnd:
+                            grid_snapshot = get_msaa_grid_data(grid_hwnd)
+                            if grid_snapshot:
+                                previous_grid = self._grid_state_cache.get(grid_hwnd)
+                                if previous_grid:
+                                    grid_changes = self._diff_grid(previous_grid, grid_snapshot)
+                                self._grid_state_cache[grid_hwnd] = grid_snapshot
+
                     except Exception:
                         ui_target = None
 
@@ -185,6 +217,8 @@ class WinEventMonitor:
                         "control_state": control_state,
                         "previous_control_state": previous_control_state,
                         "control_state_changes": control_state_changes,
+                        "grid_snapshot": grid_snapshot,
+                        "grid_changes": grid_changes,
                         "raw": {
                             "hwnd": raw_hwnd,
                             "id_object": int(id_object),
@@ -256,3 +290,29 @@ class WinEventMonitor:
                 "after": after.get(key),
             }
         return changed or None
+
+    def _diff_grid(self, before: list[dict[str, Any]], after: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+        """Calcola le differenze tra due stati di una griglia."""
+        changes = []
+        for i, current in enumerate(after):
+            if i < len(before):
+                prev = before[i]
+                if current.get("value") != prev.get("value") or current.get("name") != prev.get("name"):
+                    changes.append({
+                        "index": i,
+                        "name": current.get("name"),
+                        "before": prev.get("value"),
+                        "after": current.get("value"),
+                        "role": current.get("role")
+                    })
+            else:
+                changes.append({
+                    "index": i,
+                    "name": current.get("name"),
+                    "before": None,
+                    "after": current.get("value"),
+                    "role": current.get("role"),
+                    "note": "new_cell"
+                })
+        return changes if changes else None
+

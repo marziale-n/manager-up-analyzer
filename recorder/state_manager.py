@@ -267,15 +267,33 @@ class StateManager:
                     self._debug(f"typed control={control_key} buffer={state.typed_buffer!r}")
             return state
 
-    def on_runtime_event(self, runtime_event: dict[str, Any]) -> ControlState | None:
+    def on_runtime_event(self, runtime_event: dict[str, Any]) -> list[dict[str, Any]]:
+        """Gestisce eventi dal runtime observer e restituisce eventuali commit semantici."""
+        commits: list[dict[str, Any]] = []
         normalized = self._control_from_runtime_event(runtime_event)
+        
+        # Gestione cambiamenti griglia (fondamentale per VB6 e side-effects)
+        grid_changes = runtime_event.get("grid_changes")
+        if grid_changes:
+            commits.append({
+                "category": "semantic",
+                "event_type": "grid_update",
+                "timestamp_utc": runtime_event.get("timestamp_utc"),
+                "window_title": runtime_event.get("window_title"),
+                "process_name": runtime_event.get("process_name"),
+                "hwnd": runtime_event.get("hwnd"),
+                "ui_target": runtime_event.get("ui_target"),
+                "changes": grid_changes,
+                "reason": "side_effect_detected"
+            })
+
         if normalized is None:
-            return None
+            return commits
 
         with self._lock:
             control_key = self._build_control_key(normalized)
             if control_key is None:
-                return None
+                return commits
 
             state = self._get_or_create_state(control_key, normalized, timestamp_utc=runtime_event.get("timestamp_utc"))
             self._update_state_from_control(state, normalized, timestamp_utc=runtime_event.get("timestamp_utc"))
@@ -292,7 +310,7 @@ class StateManager:
             if event_name in {"event_object_focus", "focus"} and self.is_editable_control(normalized):
                 self.on_focus_gained(normalized, timestamp_utc=runtime_event.get("timestamp_utc"))
 
-            return state
+            return commits
 
     def resolve_commit(
         self,

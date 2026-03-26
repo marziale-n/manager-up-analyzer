@@ -96,7 +96,17 @@ class InteractionRecorder:
             f"hwnd={self._short(payload.get('hwnd'))}, "
             f"target={self._short((payload.get('ui_target') or {}).get('control_name'))}"
         )
-        self.state_manager.on_runtime_event(payload)
+        
+        # Aggiorna lo stato e riceve eventuali commit semantici (es. grid_update)
+        commits = self.state_manager.on_runtime_event(payload)
+        for commit in commits:
+            # Arricchiamo il commit con metadati di sessione
+            commit.setdefault("session_id", self.session_id)
+            commit.setdefault("timestamp_utc", utc_now_iso())
+            
+            # Scriviamo l'evento semantico nell'output principale
+            self.writer.write_event(commit)
+            self.recorded_total += 1
 
     def _debug(self, message: str) -> None:
         if not self.debug:

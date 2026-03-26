@@ -249,6 +249,36 @@ def extract_key_sequence(
     return step, idx
 
 
+def extract_grid_update_step(event: dict[str, Any], step_id: int) -> Step:
+    changes = event.get("changes", [])
+    target = build_target(event)
+    window = build_window(event)
+    
+    # Riassunto dei cambiamenti
+    summary = []
+    for change in changes[:10]: # Limita a 10 per non ingolfare il report
+        name = change.get("name") or f"Cell {change.get('index')}"
+        summary.append(f"{name}: {change.get('before')} -> {change.get('after')}")
+    
+    if len(changes) > 10:
+        summary.append(f"... and {len(changes) - 10} more changes")
+
+    data = {
+        "changes": changes,
+        "summary": "\n".join(summary),
+        "count": len(changes),
+    }
+
+    return Step(
+        step_id=step_id,
+        timestamp_utc=event.get("timestamp_utc"),
+        action="grid_update",
+        target=target,
+        window=window,
+        data=data,
+    )
+
+
 def build_steps(events: list[dict[str, Any]]) -> list[Step]:
     steps: list[Step] = []
     step_id = 1
@@ -257,6 +287,12 @@ def build_steps(events: list[dict[str, Any]]) -> list[Step]:
     while i < len(events):
         event = events[i]
         event_type = event.get("event_type")
+
+        if event_type == "grid_update":
+            steps.append(extract_grid_update_step(event, step_id))
+            step_id += 1
+            i += 1
+            continue
 
         if is_mouse_click_press(event):
             steps.append(extract_click_step(event, step_id))
@@ -305,6 +341,8 @@ def render_step(step: Step) -> str:
         key = step.data.get("key", "")
         combo = f"{mods}+{key}" if mods else key
         return f"{step.step_id}. HOTKEY {combo} in '{window_desc}'"
+    if step.action == "grid_update":
+        return f"{step.step_id}. GRID UPDATE in '{target_desc}':\n    " + step.data.get("summary", "").replace("\n", "\n    ")
 
     return f"{step.step_id}. {step.action}"
 
